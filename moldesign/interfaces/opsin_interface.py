@@ -1,4 +1,9 @@
-# Copyright 2016 Autodesk Inc.
+from __future__ import print_function, absolute_import, division
+from future.builtins import *
+from future import standard_library
+standard_library.install_aliases()
+
+# Copyright 2017 Autodesk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,22 +16,28 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import moldesign as mdt
-from moldesign import utils
 
+import moldesign as mdt
+from .. import utils
+from ..compute import packages
+
+
+@utils.kwargs_from(mdt.compute.run_job)
 def name_to_smiles(name,
-                   image='opsin',
-                   engine=None):
+                   **kwargs):
 
     command = 'opsin -osmi input.txt output.txt'
 
-    # TODO: this boilerplate has to go
-    engine = utils.if_not_none(engine, mdt.compute.get_engine())
-    imagename = mdt.compute.get_image_path(image)
-    job = engine.launch(imagename,
-                          command,
-                          inputs={'input.txt': name + '\n'},
-                          name="opsin, %s" % name)
-    mdt.uibase.display_log(job.get_display_object(), "opsin, %s"%name)
-    job.wait()
-    return job.get_output('output.txt').read().strip()
+    def finish_job(job):
+        smistring = job.get_output('output.txt').read().strip()
+        if not smistring:
+            raise ValueError('Could not parse chemical name "%s"' % name)
+        else:
+            return smistring
+
+    job = packages.opsin.make_job(command=command,
+                                  name="opsin, %s" % name,
+                                  inputs={'input.txt': name + '\n'},
+                                  when_finished=finish_job)
+
+    return mdt.compute.run_job(job, _return_result=True, **kwargs)

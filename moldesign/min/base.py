@@ -1,4 +1,9 @@
-# Copyright 2016 Autodesk Inc.
+from __future__ import print_function, absolute_import, division
+from future.builtins import *
+from future import standard_library
+standard_library.install_aliases()
+
+# Copyright 2017 Autodesk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,19 +21,17 @@ import sys
 import numpy as np
 
 import moldesign as mdt
-from moldesign import data
-from moldesign import units as u
+from .. import data
+from .. import units as u
 
 
 class MinimizerBase(object):
 
     _strip_units = True  # callbacks expect and return dimensionless quantities scaled to default unit system
-    constraint_restraints = True  # if True, add restraint penalties for both constraints and restraints
 
     def __init__(self, mol, nsteps=20,
                  force_tolerance=data.DEFAULT_FORCE_TOLERANCE,
                  frame_interval=None,
-                 restraint_multiplier=1.0,
                  _restart_from=0,
                  _restart_energy=None):
         self.mol = mol
@@ -37,6 +40,8 @@ class MinimizerBase(object):
         self.frame_interval = mdt.utils.if_not_none(frame_interval,
                                                     max(nsteps/10, 1))
         self._restart_from = _restart_from
+        self._foundmin = None
+        self._calc_cache = {}
 
         # Set up the trajectory to track the minimization
         self.traj = mdt.Trajectory(mol)
@@ -51,7 +56,6 @@ class MinimizerBase(object):
 
         # Figure out whether we'll use gradients
         self.request_list = ['potential_energy']
-        self.restraint_multiplier = restraint_multiplier
         if 'forces' in mol.energy_model.ALL_PROPERTIES:
             self.gradtype = 'analytical'
             self.request_list.append('forces')
@@ -72,7 +76,7 @@ class MinimizerBase(object):
     def _coords_to_vector(self, coords):
         """ Convert position array to a flat vector
         """
-        vec = coords.reshape(self.mol.num_atoms * 3)
+        vec = coords.reshape(self.mol.num_atoms * 3).copy()
         if self._strip_units:
             return vec.magnitude
         else:
@@ -82,12 +86,14 @@ class MinimizerBase(object):
         """ Callback function to calculate the objective function
         """
         self._sync_positions(vector)
-        self.mol.calculate(requests=self.request_list)
-        pot = self.mol.potential_energy
+        try:
+            self.mol.calculate(requests=self.request_list)
+        except mdt.QMConvergenceError:  # returning infinity can help rescue some line searches
+            return np.inf
 
-        if self.constraint_restraints:
-            for constraint in self.mol.constraints:
-                pot += self.restraint_multiplier * constraint.restraint_penalty()
+        self._cachemin()
+        self._calc_cache[tuple(vector)] = self.mol.properties
+        pot = self.mol.potential_energy
 
         if self._initial_energy is None: self._initial_energy = pot
         self._last_energy = pot
@@ -99,31 +105,70 @@ class MinimizerBase(object):
         """
         self._sync_positions(vector)
         self.mol.calculate(requests=self.request_list)
+        self._cachemin()
+        self._calc_cache[tuple(vector)] = self.mol.properties
         grad = -self.mol.forces
-
-        if self.constraint_restraints:
-            for constraint in self.mol.constraints:
-                grad -= self.restraint_multiplier * constraint.restraint_penalty_force()
 
         grad = grad.reshape(self.mol.num_atoms * 3)
         self._last_grad = grad
-        if self._strip_units: return grad.defunits().magnitude
-        else: return grad.defunits()
+        if self._strip_units:
+            return grad.defunits().magnitude
+        else:
+            return grad.defunits()
 
-    def __call__(self):
+    def _cachemin(self):
+        """ Caches the minimum potential energy properties so we can return them
+        when the calculation is done.
+
+        Underlying implementations can use this or not - it may not be valid if constraints
+        are present
+        """
+        if self._foundmin is None or self.mol.potential_energy < self._foundmin.potential_energy:
+            self._foundmin = self.mol.properties
+
+    def __call__(self, remote=False, wait=True):
         """ Run the minimization
+
+        Args:
+            remote (bool): launch the minimization in a remote job
+            wait (bool): if remote, wait until the minimization completes before returning.
+               (if remote=True and wait=False, will return a reference to the job)
 
         Returns:
             moldesign.Trajectory: the minimization trajectory
         """
-        self.run()
-        if self.traj.num_frames == 0 or self.traj[-1].minimization_step != self.current_step:
+        if hasattr(self.mol.energy_model, '_PKG') and self.mol.energy_model._PKG.force_remote:
+            remote = True
+        if remote:
+            return self.runremotely(wait=wait)
+        self._run()
+
+        # Write the last step to the trajectory, if needed
+        if self.traj.potential_energy[-1] != self.mol.potential_energy:
+            assert self.traj.potential_energy[-1] > self.mol.potential_energy
             self.traj.new_frame(minimization_step=self.current_step,
                                 annotation='minimization result (%d steps) (energy=%s)'%
                                            (self.current_step, self.mol.potential_energy))
         return self.traj
 
-    def run(self):
+    def runremotely(self, wait=True):
+        """ Execute this minimization in a remote process
+
+        Args:
+            wait (bool): if True, block until the minimization is complete.
+                Otherwise, return a ``pyccc.PythonJob`` object
+        """
+        return mdt.compute.runremotely(self.__call__, wait=wait,
+                                       jobname='%s: %s' % (self.__class__.__name__, self.mol.name),
+                                       when_finished=self._finishremoterun)
+
+    def _finishremoterun(self, job):
+        traj = job.function_result
+        self.mol.positions = traj.positions[-1]
+        self.mol.properties.update(traj.frames[-1])
+        return traj
+
+    def _run(self):
         raise NotImplementedError('This is an abstract base class')
 
     def callback(self, *args):
@@ -137,8 +182,8 @@ class MinimizerBase(object):
 
         self.mol.calculate(self.request_list)
         self.traj.new_frame(minimization_step=self.current_step,
-                       annotation='minimization steps:%d (energy=%s)' %
-                                  (self.current_step, self.mol.potential_energy))
+                            annotation='minimization steps:%d (energy=%s)'%
+                                       (self.current_step, self.mol.potential_energy))
         if self.nsteps is None:
             message = ['Minimization step %d' % self.current_step]
         else:
@@ -152,17 +197,17 @@ class MinimizerBase(object):
             force = self._last_grad
 
             message.append(u'RMS \u2207E={rmsf.magnitude:.3e}, '
-                           u'max \u2207E={mf.magnitude:.3e}{mf.units}'.format(
+                           u'max \u2207E={mf.magnitude:.3e} {mf.units}'.format(
                 rmsf=np.sqrt(force.dot(force) / self.mol.ndims),
                 mf=np.abs(force).max()))
 
-        if self.constraint_restraints and self.mol.constraints:
+        if self.mol.constraints:
             nsatisfied = 0
             for c in self.mol.constraints:
                 if c.satisfied(): nsatisfied += 1
             message.append('constraints:%d/%d' % (nsatisfied, len(self.mol.constraints)))
 
-        print ', '.join(message)
+        print(', '.join(message))
         sys.stdout.flush()
 
     @classmethod
@@ -171,13 +216,11 @@ class MinimizerBase(object):
         """
         @mdt.utils.args_from(cls, allexcept=['self'])
         def asfn(*args, **kwargs):
+            remote = kwargs.pop('remote', False)
+            wait = kwargs.pop('wait', True)
             obj = cls(*args, **kwargs)
-            return obj()
+            return obj(remote=remote, wait=wait)
         asfn.__name__ = newname
         asfn.__doc__ = cls.__doc__
 
         return asfn
-
-
-
-

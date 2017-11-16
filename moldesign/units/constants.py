@@ -1,4 +1,9 @@
-# Copyright 2016 Autodesk Inc.
+from __future__ import print_function, absolute_import, division
+from future.builtins import *
+from future import standard_library
+standard_library.install_aliases()
+
+# Copyright 2017 Autodesk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +18,8 @@
 # limitations under the License.
 
 from .quantity import *
+
+dimensionless = ureg.dimensionless
 
 # Constants
 unity = ureg.angstrom / ureg.angstrom
@@ -35,8 +42,9 @@ electron_mass = m_e = ureg.electron_mass
 electron_charge = q_e = ureg.elementary_charge
 
 # useful units
-fs = femtoseconds = ureg.fs
-ps = picoseconds = ureg.ps
+fs = femtoseconds = ureg.femtosecond
+ps = picoseconds = ureg.picosecond
+ns = nanoseconds = ureg.nanosecond
 eV = electronvolts = ureg.eV
 kcalpermol = ureg.kcalpermol
 gpermol = ureg.gpermol
@@ -46,7 +54,9 @@ degrees = degree = deg = ureg.degrees
 amu = da = dalton = ureg.amu
 kelvin = ureg.kelvin
 nm = ureg.nanometers
-ang = angstrom = ureg.ang
+angstrom = ureg.angstrom
+molar = ureg.mole / ureg.liter
+debye = ureg.debye
 
 # sets default unit systems
 def_length = angstrom

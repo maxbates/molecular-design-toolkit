@@ -1,4 +1,4 @@
-# Copyright 2016 Autodesk Inc.
+# Copyright 2017 Autodesk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,15 +15,10 @@ import os
 import sys
 from os.path import relpath, join
 
-import imp
-
-import subprocess
 from setuptools import find_packages, setup
 from setuptools.command.install import install
 
 import versioneer
-
-assert sys.version_info[:2] == (2, 7), "Sorry, this package requires Python 2.7."
 
 PACKAGE_NAME = 'moldesign'
 
@@ -33,17 +28,19 @@ Intended Audience :: Science/Research
 Intended Audience :: Developers
 Intended Audience :: Education
 License :: OSI Approved :: Apache Software License
+Programming Language :: Python :: 2
 Programming Language :: Python :: 2.7
-Programming Language :: Python :: 2 :: Only
+Programming Language :: Python :: 3
+Programming Language :: Python :: 3.5
+Programming Language :: Python :: 3.6
 Topic :: Scientific/Engineering :: Chemistry
 Topic :: Scientific/Engineering :: Physics
-Topic :: Scientific/Engineering :: Visualization
 Operating System :: POSIX
 Operating System :: Unix
 Operating System :: MacOS
 """
 
-HOME = os.environ['HOME']
+HOME = os.path.expanduser('~')
 CONFIG_DIR = os.path.join(HOME, '.moldesign')
 PYEXT = set('.py .pyc .pyo'.split())
 
@@ -70,11 +67,13 @@ class PostInstall(install):
         self.prompt_intro()
 
     def prompt_intro(self):  # this doesn't actually display - print statements don't work?
-        print 'Thank you for installing the Molecular Design Toolkit!!!'
-        print 'For help, documentation, and any questions, visit us at '
-        print '    http://moldesign.bionano.autodesk.com.com/'
-        print '\nTo get started, please run:'
-        print ' >>> python -m moldesign intro'
+        print('Thank you for installing the Molecular Design Toolkit!!!')
+        print('For help, documentation, and any questions, visit us at ')
+        print('    http://moldesign.bionano.autodesk.com/')
+        print("\nFor visualization functionality inside python notebooks, please also install")
+        print("the `mdtwidgets` package.")
+
+
 
 cmdclass = versioneer.get_cmdclass()
 cmdclass['install'] = PostInstall
@@ -89,8 +88,6 @@ setup(
     url='http://moldesign.bionano.autodesk.com',
     cmdclass=cmdclass,
     license='Apache 2.0',
-    author='Aaron Virshup, BioNano Research at Atuodesk',
+    author='Aaron Virshup, Autodesk Life Sciences',
     author_email='moleculardesigntoolkit@autodesk.com',
-    description='The Molecular Design Toolkit: Dead-simple chemical simulation, visualization, '
-                'and cloud computing in a notebook'
-)
+    description='A single, intuitive interface to a huge range of molecular modeling software')

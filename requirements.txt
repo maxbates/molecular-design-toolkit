@@ -1,18 +1,14 @@
 biopython
-docker-py
+docker >= 2.0
+future
 fortranformat
 funcsigs
-ipywidgets >= 5.1
-ipython >= 4.2
-markdown2
-matplotlib
-nbmolviz >= 0.6.5
-notebook >= 4.2
-numpy
-pint >= 0.7
-pyccc >= 0.6.4
-pytest
+numpy >= 1.12
+pathlib2 ; python_version < '3.3'
+parmed >= 2.7.3
+pint >= 0.8.1
+pyccc >= 0.7.13
 pyyaml
 requests
 scipy
-webcolors
+sortedcontainers

@@ -1,4 +1,9 @@
-# Copyright 2016 Autodesk Inc.
+from __future__ import print_function, absolute_import, division
+from future.builtins import *
+from future import standard_library
+standard_library.install_aliases()
+
+# Copyright 2017 Autodesk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,14 +18,15 @@
 # limitations under the License.
 
 import numpy as np
-import scipy.spatial.distance
 
 import moldesign as mdt
 from moldesign import units as u
 from moldesign.external import transformations as trns
 from moldesign.interfaces import symmol_interface as smi
+from . import __all__ as __toplevel__
 
 get_symmetry = smi.run_symmol
+__toplevel__.append('get_symmetry')
 
 
 class SymmetryElement(object):
@@ -29,13 +35,31 @@ class SymmetryElement(object):
     inversion center (Ci),
     mirror plane (Cs), rotation axis (C2,C3,...), or
     improper rotation (S4, S6, ...)
+
+    Attributes:
+        mol (moldesign.Molecule): molecule this symmetry describes
+        idx (int): symmetry index
+        symbol (str): Schoenflies symbol
+        matrix (np.array): symmetry transformation
+        csm (mdt.units.MdtQuantity): mean-squared-distance to this symmetry group (i.e.,
+           0 if this symmetry is exact)
+        max_diff (mdt.unitsMdtQuantity): maximum distance of any one atom to this symmetry group
     """
 
-    def __init__(self, symbol, matrix, **kwargs):
+    def __init__(self, mol, idx, symbol, matrix, csm, max_diff):
+        self.mol = mol
         self.symbol = symbol
         self.matrix = matrix
-        for kw, val in kwargs.iteritems():
-            setattr(self, kw, val)
+        self.mol = mol
+        self.csm = csm
+        self.max_diff = max_diff
+        self.idx = idx
+
+    def __str__(self):
+        return 'SymmetryElement %s, error=%s' % (self.symbol, self.csm)
+
+    def __repr__(self):
+        return '<%s>' % self
 
     def get_axis(self):
         """
@@ -67,22 +91,40 @@ class SymmetryElement(object):
 
 class MolecularSymmetry(object):
     def __init__(self, mol, symbol, rms,
-                 orientation=None,
-                 elems=None,
-                 **kwargs):
+                 orientation, elems,
+                 _job=None):
         self.mol = mol
         self.symbol = symbol
         self.rms = rms
-        self.orientation = mdt.utils.if_not_none(orientation, mol.atoms.position)
+        self.orientation = mdt.utils.if_not_none(orientation, mol.positions)
         self.elems = mdt.utils.if_not_none(elems, [])
-        for kw, val in kwargs.iteritems():
-            setattr(self, kw, val)
+        self.groups = mdt.utils.Categorizer(lambda x:x.symbol, self.elems)
+        self._job = _job
+
+    @property
+    def exact(self):
+        """ List[SymmetryElement]: Exact symmetry elements
+        """
+        return [elem for elem in self.elems if elem.max_diff == 0.0]
+
+    @property
+    def approximate(self):
+        """ List[SymmetryElement]: Approximate symmetry elements
+        """
+        return [elem for elem in self.elems if elem.max_diff != 0.0]
+
+    def __str__(self):
+        return '%d symmetry element%s' % (len(self.elems), 's' if len(self.elems) != 1 else '')
+
+    def __repr__(self):
+        return '%s of molecule %s' % (self, self.mol.name)
 
     def get_symmetrized_coords(self, elem):
         """
         Symmetrize the molecule based on the symmetry operation
         This will work as long as the symmetry operation brings each atom closest to a symmetry relation.
         """
+        import scipy.spatial.distance
 
         # First, apply the transformation
         oriented_coords = self.orientation
@@ -92,7 +134,7 @@ class MolecularSymmetry(object):
         align_to_transform = {}  # map between the original positions and their transformed positions
         transform_to_align = {}  # inverse
         byelement = mdt.utils.Categorizer(lambda x: x.element, self.mol.atoms)
-        for elemname, atoms in byelement.iteritems():
+        for elemname, atoms in byelement.items():
             indices = np.array([atom.index for atom in atoms])
             atoms_aligned = oriented_coords[indices].defunits_value()
             atoms_transformed = transformed_coords[indices].defunits_value()
@@ -104,7 +146,7 @@ class MolecularSymmetry(object):
 
         # Make the positions exactly symmetric by averaging them
         pos = np.zeros(transformed_coords.shape) * u.default.length
-        for align_atom, transform_atom in align_to_transform.iteritems():
+        for align_atom, transform_atom in align_to_transform.items():
             assert transform_to_align[transform_atom] == align_atom, \
                 'Molecule is too far from this symmetry to symmetrize'
             pos[transform_atom] = (oriented_coords[transform_atom] +

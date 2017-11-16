@@ -1,14 +1,22 @@
 <img src="moldesign/_notebooks/img/Header.png">
-[![PyPI version](https://badge.fury.io/py/moldesign.svg)](https://badge.fury.io/py/moldesign) <a href="https://badge.fury.io/gh/Autodesk%2Fmolecular-design-toolkit" style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: rgb(70, 61, 84);">
-                                    <img src="https://badge.fury.io/gh/Autodesk%2Fmolecular-design-toolkit.svg" alt="GitHub version" height="20">&nbsp;
-                                </a> <a href="https://github.com/autodesk/molecular-design-toolkit/blob/master/LICENSE" style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: rgb(70, 61, 84);"><img src="https://img.shields.io/badge/license-Apache%202-blue.svg"> </a>
+
+[![PyPI version](https://img.shields.io/pypi/v/moldesign.svg?label=dev)](https://pypi.python.org/pypi/moldesign)
+[![github release tag](https://img.shields.io/github/release/autodesk/molecular-design-toolkit.svg?label=stable)](https://pypi.python.org/pypi/moldesign)
+![Python versions](https://img.shields.io/pypi/pyversions/moldesign.svg)
+[![License](https://img.shields.io/pypi/l/moldesign.svg)](LICENSE.md)
+[ ![Codeship Status for Autodesk/molecular-design-toolkit](https://img.shields.io/codeship/5ed079f0-08f6-0135-3493-3696d72919a3/master.svg)](https://app.codeship.com/projects/214515)
+[![Coverage Status](https://img.shields.io/coveralls/Autodesk/molecular-design-toolkit/master.svg)](https://coveralls.io/github/Autodesk/molecular-design-toolkit?branch=master)
+                                
+**Try it now:** [![Binder](http://mybinder.org/badge.svg)](http://mybinder.org:/repo/avirshup/mdt-gallery-test)
 
 # Molecular Design Toolkit
-Molecular modeling without the pain - a Python 2.7 library offering integrated simulation, visualization, analysis, and cloud computing. 
+Molecular modeling without the pain - a Python library offering integrated simulation, visualization, analysis, and cloud computing. 
 
 The toolkit aims to lower the barriers between you and your science by integrating mature, open source simulation packages with a readable abstract API, Jupyter notebook visualization, and native cloud computing.
 
 ## Get started
+MDT requires [Docker](https://www.docker.com/get-docker) and Python 2.7. (Python 3.5+ is supported in the development version, and will be available in the stable 0.8 release.)
+
 On the command line, run:
 ```shell
 pip install moldesign

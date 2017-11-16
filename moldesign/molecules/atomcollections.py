@@ -1,4 +1,9 @@
-# Copyright 2016 Autodesk Inc.
+from __future__ import print_function, absolute_import, division
+from future.builtins import *
+from future import standard_library
+standard_library.install_aliases()
+
+# Copyright 2017 Autodesk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,75 +17,108 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from past.builtins import basestring
 import copy
+import collections
+import itertools
 
 import numpy as np
-from scipy.spatial import distance as spd
 
 import moldesign as mdt
-from moldesign import units as u
-from moldesign import utils, external, mathutils
+from .. import units as u
+from .. import utils, external, mathutils, widgets
 from . import toplevel
 
 
-class AtomContainer(object):
+class AtomGroup(object):
     """ Mixin functions for objects that have a ``self.atoms`` attribute with a list of atoms
 
     Attributes:
         atoms (List[Atom]): a list of atoms
     """
-
-    @property
-    def positions(self):
-        """ u.Array[length]: (Nx3) array of atomic positions
-        """
-        return self.atoms.position
-
-    @positions.setter
-    def positions(self, val):
-        assert len(val) == self.num_atoms
-        for atom, p in zip(self.atoms, val):
-            atom.position = p
+    draw2d = widgets.WidgetMethod('atomgroups.draw2d')
+    draw3d = widgets.WidgetMethod('atomgroups.draw3d')
+    draw = widgets.WidgetMethod('atomgroups.draw')
 
     def __init__(self, *args, **kwargs):
         """ This should never be called directly - it will be called by the `super` methods
         of its subclasses """
-        super(AtomContainer, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self._atom_attrs = None
         self.viz2d = None
         self.viz3d = None
+
+    @property
+    def num_atoms(self):
+        """ int: number of atoms in this object """
+        return len(self.atoms)
+    natoms = num_atoms
 
     @property
     def heavy_atoms(self):
         """ AtomList: a list of all heavy atoms (i.e., non-hydrogen) in this object """
         return AtomList([a for a in self.atoms if a.atnum != 1])
 
-    def get_atoms(self, **queries):
-        """Allows keyword-based atom queries.
+    @property
+    def mass(self):
+        """ u.Scalar[mass]: total mass of this object
+        """
+        return u.unitsum(a.mass for a in self.atoms)
+
+    @property
+    def momentum(self):
+        """ u.Vector[momentum]: total momentum of this object
+        """
+        return self.momenta.sum(axis=0)
+
+    @property
+    def velocity(self):
+        """ u.Vector[velocity]: center of mass velocity of this object
+        """
+        return self.momentum/self.mass
+
+    @property
+    def kinetic_energy(self):
+        r""" u.Scalar[energy]: Classical kinetic energy :math:`\sum_{\text{atoms}} \frac{p^2}{2m}`
+        """
+        from ..helpers import kinetic_energy
+        return kinetic_energy(self.momenta, self.masses)
+
+    def get_atoms(self, *keywords, **queries):
+        """Allows keyword-based atom queries. Returns atoms that match ALL queries.
 
         Args:
-            **queries (dict): parameters to match
+            *keywords (list): pre-set keywords (currently, just selects by residue type)
+            **queries (dict): attributes (or residue attributes) to match
+
+        Examples:
+            >>> mol.get_atoms('protein')  # returns all atoms in proteins
+            >>> mol.get_atoms(name='CA')  # returns all alpha carbons
+            >>> mol.get_atoms('dna', symbol='P')  # returns all phosphorus in DNA
 
         Returns:
             AtomList: the atoms matching this query
         """
-        if not queries: return self
+        if not (queries or keywords):
+            return mdt.AtomList(self.atoms)
 
-        def atom_callback(atom, attrs):
-            obj = atom
-            for attr in attrs:
-                obj = getattr(obj, attr)
-            return obj
+        atoms = self.atoms
 
-        result = AtomList()
-        for atom in self.atoms:
-            for q, matches in queries.iteritems():
-                attr = atom_callback(atom, q.split('.'))
-                if type(matches) in (list, tuple):
-                    if attr not in matches: break
-                else:
-                    if attr != matches: break
-            else:  # if here, this atom matched all queries
+        KEYS = 'protein dna rna water unknown ion'.split()
+
+        for key in keywords:
+            if key in KEYS:
+                atoms = mdt.AtomList(atom for atom in atoms
+                                     if atom.residue.type == key)
+            else:
+                raise ValueError("Invalid keyword '%s': valid values are %s" % (key, KEYS))
+
+        result = mdt.AtomList()
+        for atom in atoms:
+            for field, val in queries.items():
+                if getattr(atom, field, None) != val and getattr(atom.residue, field, None) != val:
+                    break
+            else:
                 result.append(atom)
 
         return result
@@ -98,14 +136,16 @@ class AtomContainer(object):
             >>> dists = self.calc_distance_array(other)
             >>> dists[i, j] == self.atoms[i].distance(other.atoms[j])
         """
+        from scipy.spatial.distance import cdist
+
         other = utils.if_not_none(other, self)
         try:
-            other_positions = other.positions.value_in(u.ang)
+            other_positions = other.positions.defunits_value()
         except AttributeError:
-            other_positions = np.array([other.position.value_in(u.ang)])
+            other_positions = np.array([other.position.defunits_value()])
 
-        distances = spd.cdist(self.position.value_in(u.ang), other_positions)
-        return distances * u.ang
+        distances = cdist(self.positions.defunits_value(), other_positions)
+        return distances * u.default.length
 
     def calc_displacements(self):
         """ Calculate an array of displacements between all atoms in this object
@@ -136,38 +176,12 @@ class AtomContainer(object):
         distance_array = self.calc_distance_array(other)
         return distance_array.min()
 
-    def atoms_within(self, radius, other=None, include_self=False):
-        """ Return all atoms in an object within a given radius of this object
-
-        Args:
-            radius (u.Scalar[length]): radius to search for atoms
-            other (AtomContainer): object containing the atoms to search (default:self.parent)
-            include_self (bool): if True, include the atoms from this object (since, by definition,
-               their distance from this object is 0)
-
-        Returns:
-            AtomList: list of the atoms within ``radius`` of this object
-        """
-        if other is None:
-            other = self.atoms[0].molecule
-        if not include_self:
-            myatoms = set(self.atoms)
-
-        close_atoms = AtomList()
-        for atom in other.atoms:
-            if self.distance(atom) <= radius and (include_self or (atom not in myatoms)):
-                close_atoms.append(atom)
-        return close_atoms
-
-    @property
-    def num_atoms(self):
-        """ int: number of atoms in this object """
-        return len(self.atoms)
-    natoms = numatoms = num_atoms
-
     @property
     def center_of_mass(self):
         """ units.Vector[length]: The (x,y,z) coordinates of this object's center of mass """
+        if self.num_atoms == 0:  # nicer exception than divide-by-zero
+            raise ValueError('"%s" has no atoms' % str(self))
+
         total_mass = 0.0 * u.default.mass
         com = np.zeros(3) * u.default.length * u.default.mass
         for atom in self.atoms:
@@ -175,6 +189,12 @@ class AtomContainer(object):
             com += atom.position * atom.mass
         com = com / total_mass
         return com
+
+    @center_of_mass.setter
+    def center_of_mass(self, value):
+        vec = value - self.com
+        self.translate(vec)
+
     com = center_of_mass  # synonym
 
     def _getatom(self, a):
@@ -199,7 +219,7 @@ class AtomContainer(object):
             units.Scalar[angle]
         """
         # TODO: use single dispatch to also accept two bonds
-        return mdt.geom.angle(*map(self._getatom, (a1, a2, a3)))
+        return mdt.geom.angle(*list(map(self._getatom, (a1, a2, a3))))
 
     def dihedral(self, a1, a2, a3=None, a4=None):
         """ Calculate the dihedral angle between atoms a1, a2, a3, a4.
@@ -212,146 +232,32 @@ class AtomContainer(object):
         Returns:
             units.Scalar[angle]
         """
-        return mdt.geom.dihedral(*map(self._getatom, (a1, a2, a3, a4)))
+        return mdt.geom.dihedral(*list(map(self._getatom, (a1, a2, a3, a4))))
 
-    def draw(self, width=500, height=500, show_2dhydrogens=None, display=False):
-        """ Visualize this molecule (Jupyter only).
+    def copy_atoms(self):
+        """ Copy a group of atoms along and relevant topological information.
 
-        Creates a 3D viewer, and, for small molecules, a 2D viewer).
-
-        Args:
-            width (int): width of the viewer in pixels
-            height (int): height of the viewer in pixels
-            show_2dhydrogens (bool): whether to show the hydrogens in 2d (default: True if there
-                   are 10 or less heavy atoms, false otherwise)
-            display (bool): immediately display this viewer
-
-        Returns:
-            moldesign.ui.SelectionGroup
-        """
-        import ipywidgets as ipy
-        import IPython.display
-
-        if self.num_atoms < 40:
-
-            viz2d = self.draw2d(width=width, height=height,
-                                display=False,
-                                show_hydrogens=show_2dhydrogens)
-            viz3d = self.draw3d(width=width, height=height,
-                                display=False)
-            views = ipy.HBox([viz2d, viz3d])
-        else:
-            views = self.draw3d(display=False)
-
-        displayobj = mdt.uibase.SelectionGroup([views, mdt.uibase.components.AtomInspector()])
-
-        if display:
-            IPython.display.display(displayobj)
-        return displayobj
-
-    def draw3d(self, highlight_atoms=None, **kwargs):
-        """ Draw this object in 3D. Jupyter only.
-
-        Args:
-            highlight_atoms (List[Atom]): atoms to highlight when the structure is drawn
-
-        Returns:
-            mdt.GeometryViewer: 3D viewer object
-        """
-        from moldesign import viewer
-        self.viz3d = viewer.GeometryViewer(self, **kwargs)
-        if highlight_atoms is not None:
-            self.viz3d.highlight_atoms(highlight_atoms)
-        return self.viz3d
-
-    def draw2d(self, highlight_atoms=None, show_hydrogens=None, **kwargs):
-        """
-        Draw this object in 2D. Jupyter only.
-
-        Args:
-            highlight_atoms (List[Atom]): atoms to highlight when the structure is drawn
-            show_hydrogens (bool): whether to draw the hydrogens or not (default: True if there
-                   are 10 or less heavy atoms, false otherwise)
-
-        Returns:
-            mdt.ChemicalGraphViewer: 2D viewer object
-        """
-        from moldesign import viewer
-        if show_hydrogens is None:
-            show_hydrogens = len(self.heavy_atoms) <= 10
-        if not show_hydrogens:
-            alist = [atom for atom in self.atoms if atom.atnum > 1]
-        else:
-            alist = self
-        self.viz2d = viewer.DistanceGraphViewer(alist, **kwargs)
-        if highlight_atoms: self.viz2d.highlight_atoms(highlight_atoms)
-        return self.viz2d
-
-    def copy(self):
-        """
-        Copy a group of atoms which may already have bonds, residues, and a parent molecule
-        assigned. Do so by copying only the relevant entities, and creating a "mask" with
-        deepcopy's memo function to stop anything else from being copied.
+        This specifically copies:
+          - the atoms themselves (along with their positions, momenta, and bond graphs)
+          - any residues they are are part of
+          - any chains they are part of
+          - any bonds between them
+        It does NOT copy:
+          - other atoms that are part of these atoms' residues
+          - other residues that are part of these atoms chains
+          - the molecule these atoms are part of
 
         Returns:
             AtomList: list of copied atoms
         """
-        oldatoms = self.atoms
-        old_bond_graph = {a: {} for a in self.atoms}
+        graph = {}
+        memo = {'bondgraph':graph}
         for atom in self.atoms:
-            for nbr in atom.bond_graph:
-                if nbr in old_bond_graph:
-                    old_bond_graph[atom][nbr] = atom.bond_graph[nbr]
-
-        # Figure out which bonds, residues and chains to copy
-        tempatoms = AtomList([copy.copy(atom) for atom in oldatoms])
-        old_to_new = dict(zip(oldatoms, tempatoms))
-        temp_bond_graph = {a: {} for a in tempatoms}
-        replaced = {}
-        for atom, oldatom in zip(tempatoms, oldatoms):
-            atom.molecule = None
-            atom.bond_graph = {}
-
-            if atom.chain is not None:
-                if atom.chain not in replaced:
-                    chain = copy.copy(atom.chain)
-                    chain.molecule = None
-                    chain.children = {}
-                    replaced[atom.chain] = chain
-                else:
-                    chain = replaced[atom.chain]
-
-                atom.chain = chain
-
-            if atom.residue is not None:
-                if atom.residue not in replaced:
-                    res = copy.copy(atom.residue)
-                    res.molecule = None
-                    res.chain = atom.chain
-                    res.children = {}
-
-                    res.chain.add(res)
-                    replaced[atom.residue] = res
-                else:
-                    res = replaced[atom.residue]
-
-                atom.residue = res
-                assert atom.residue.chain is atom.chain
-                res.add(atom)
-
-            for oldnbr, bondorder in oldatom.bond_graph.iteritems():
-                if oldnbr not in old_to_new: continue
-                newnbr = old_to_new[oldnbr]
-                temp_bond_graph[atom][newnbr] = bondorder
-
-        # Finally, do a deepcopy, which bring all the information along without linking it
-        newatoms, new_bond_graph = copy.deepcopy((tempatoms, temp_bond_graph))
-
-        for atom, original in zip(newatoms, oldatoms):
-            atom.bond_graph = new_bond_graph[atom]
-            atom.position = original.position
-            atom.momentum = original.momentum
-
+            atom._subcopy(memo)
+        tempatoms = [memo[atom] for atom in self.atoms]
+        newatoms, newbonds = copy.deepcopy((tempatoms, graph))
+        for atom in newatoms:
+            atom.bond_graph = newbonds[atom]
         return AtomList(newatoms)
 
     ###########################################
@@ -387,60 +293,230 @@ class AtomContainer(object):
         """
         # TODO: deal with units ... hard because the matrix has diff units for diff columns
         assert matrix.shape == (4, 4)
-        positions = u.array(self.atoms.position)
-        newpos = mathutils.apply_4x4_transform(matrix, positions)
-        for atom, r in zip(self.atoms, newpos):
-            atom.position = r
+        self.positions = mathutils.apply_4x4_transform(matrix, self.positions)
+
+    def atoms_within(self, radius, other=None, include_self=False):
+        """ Return all atoms in an object within a given radius of this object
+
+        Args:
+            radius (u.Scalar[length]): radius to search for atoms
+            other (AtomContainer): object containing the atoms to search (default:self.molecule)
+            include_self (bool): if True, include the atoms from this object (since, by definition,
+               their distance from this object is 0)
+
+        Returns:
+            AtomList: list of the atoms within ``radius`` of this object
+        """
+        if other is None:
+            other = self.atoms[0].molecule
+        if not include_self:
+            filter_atoms = set(self.atoms)
+        else:
+            filter_atoms = set()
+
+        distances = self.calc_distance_array(other=other)
+        mindists = distances.min(axis=0)
+
+        close_atoms = AtomList(atom for dist,atom in zip(mindists, other.atoms)
+                               if dist <= radius and atom not in filter_atoms)
+        return close_atoms
+
+    def residues_within(self, radius, other=None, include_self=False):
+        """ Return all atoms in an object within a given radius of this object
+
+        Args:
+            radius (u.Scalar[length]): radius to search for atoms
+            other (AtomContainer): object containing the atoms to search (default:self.molecule)
+            include_self (bool): if True, include the atoms from this object (since, by definition,
+               their distance from this object is 0)
+
+        Returns:
+            AtomList: list of the atoms within ``radius`` of this object
+        """
+        atoms = self.atoms_within(radius, other=other, include_self=include_self)
+        residues = collections.OrderedDict((atom.residue, None) for atom in atoms)
+        return list(residues.keys())
+
+
+class _AtomArray(object):
+    def __init__(self, attrname):
+        self.attrname = attrname
+
+    def __get__(self, instance, owner):
+        return u.array([getattr(atom, self.attrname) for atom in instance.atoms])
+
+    def __set__(self, instance, value):
+        assert len(value) == instance.num_atoms
+        for atom, atomval in zip(instance.atoms, value):
+            setattr(atom, self.attrname, atomval)
+
+
+class AtomContainer(AtomGroup):
+    """
+    Mixin functions for NON-MOLECULE objects that have a list of atoms at``self.atoms``
+    """
+    positions = _AtomArray('position')
+    masses = _AtomArray('mass')
+    momenta = _AtomArray('momentum')
+    velocities = _AtomArray('velocity')
+
+    def __add__(self, other):
+        l = mdt.AtomList(self.atoms)
+        l.extend(other.atoms)
+        return l
+
+    @property
+    def bond_graph(self):
+        """ Dict[moldesign.Atom: List[moldesign.Atom]]: bond graph for all atoms in this object
+        """
+        return {atom: atom.bond_graph for atom in self.atoms}
+
+    @property
+    def bonds(self):
+        """ Iterable[moldesign.Bond]: iterator over bonds from this object's atoms
+        """
+        bg = self.bond_graph
+        for atom, nbrs in bg.items():
+            for nbr, order in nbrs.items():
+                if atom.index < nbr.index or nbr not in bg:
+                    yield mdt.Bond(atom, nbr)
+
+    def get_bond(self, a1, a2):
+        return mdt.Bond(a1, a2)
+
+    @property
+    def internal_bonds(self):
+        """ Iterable[moldesign.Bond]: iterator over bonds that connect two atoms in this object
+        """
+        bg = self.bond_graph
+        for atom, nbrs in bg.items():
+            for nbr, order in nbrs.items():
+                if atom.index < nbr.index and nbr in bg:
+                    yield mdt.Bond(atom, nbr)
+
+    @property
+    def external_bonds(self):
+        """
+        Iterable[moldesign.Bond]: iterator over bonds that bond these atoms to other atoms
+        """
+        bg = self.bond_graph
+        for atom, nbrs in bg.items():
+            for nbr, order in nbrs.items():
+                if nbr not in bg:
+                    yield mdt.Bond(atom, nbr)
+
+    @property
+    def bonded_atoms(self):
+        """ List[moldesign.Atom]: list of external atoms this object is bonded to
+        """
+        bg = self.bond_graph
+        atoms = []
+        for atom, nbrs in bg.items():
+            for nbr, order in nbrs.items():
+                if nbr not in bg:
+                    atoms.append(nbr)
+        return atoms
+
+    def bonds_to(self, other):
+        """ Returns list of bonds between this object and another one
+
+        Args:
+            other (AtomContainer): other object
+
+        Returns:
+            List[moldesign.Bond]: bonds between this object and another
+        """
+        bonds = []
+        otheratoms = set(other.atoms)
+        for bond in self.internal_bonds:
+            if bond.a1 in otheratoms or bond.a2 in otheratoms:
+                bonds.append(bond)
+        return bonds
 
 
 @toplevel
-class AtomList(list, AtomContainer):
-    """A list of atoms that allows attribute "slicing" - accessing an attribute of the
-    list will return a list of atom attributes.
+class AtomList(AtomContainer, list):  # order is important, list will override methods otherwise
+    """ A list of atoms with various helpful methods for creating and manipulating atom selections
 
-    Example:
-        >>> atomlist.mass == [atom.mass for atom in atomlist.atoms]
-        >>> getattr(atomlist, attr) == [getattr(atom, attr) for atom in atomlist.atoms]
+    Args:
+        atomlist (List[AtomContainer]): list of objects that are either atoms or contain a list of
+           atoms at ``atomlist.atoms``
     """
+    def __init__(self, atomlist=()):
+        atoms = []
+        for obj in atomlist:
+            if hasattr(obj, 'atoms'):
+                atoms.extend(obj.atoms)
+            else:
+                atoms.append(obj)
+        super().__init__(atoms)
 
-    def __init__(self, *args, **kwargs):
-        super(AtomList, self).__init__(*args, **kwargs)
+    def __getitem__(self, item):
+        result = super().__getitem__(item)
+        if isinstance(item, slice):
+            return type(self)(result)
+        else:
+            return result
 
-    def __dir__(self):
-        """
-        Overrides ``dir`` to allow tab completion for both this object's attributes
-        and the underlying atomic properties
-        """
-        if self._atom_attrs is None:
-            self._atom_attrs = set([k for k,v in self.atoms[0].__dict__.iteritems()
-                                    if not callable(v)])
-        return list(self._atom_attrs.union(dir(self.__class__)).union(self.__dict__))
+    def __getslice__(self, i, j):
+        result = super().__getslice__(i, j)
+        return type(self)(result)
 
-    def __getattr__(self, item):
-        """
-        Returns an array of atomic properties, e.g., an array of all atomic masses
-        is returned by ``AtomContainer.mass = AtomContainer.__getattr__('mass')``
-        """
-        if item.startswith('__'):
-            raise AttributeError
-        atom_attrs = [getattr(atom, item) for atom in self.atoms]
+    def __str__(self):
+        return '[Atoms: %s]' % ', '.join(atom._shortstr() for atom in self)
+
+    def __repr__(self):
         try:
-            return u.array(atom_attrs)
-        except (TypeError, StopIteration):
-            return atom_attrs
+            return '<AtomList: [%s]>' % ', '.join(atom._shortstr() for atom in self)
+        except (KeyError, AttributeError):
+            return '<AtomList at %x (__repr__ failed)>' % id(self)
 
-    def __setattr__(self, key, vals):
-        """
-        Set an array of atomic properties, e.g., set all atomic masses to 1 with
-        ``atoms.mass = [1.0 for a in atoms]``
-        """
-        assert len(vals) == len(self)
-        for atom, v in zip(self, vals): setattr(atom, key, v)
+    copy = AtomContainer.copy_atoms
 
+    def intersection(self, *otherlists):
+        """ Return a list of atoms that appear in all lists (including this one).
+
+        Args:
+            *otheriters (Iterable): one or more lists of atoms
+
+        Returns:
+            moldesign.AtomList: intersection of this lists with all passed lists. Preserves order
+              in this list
+        """
+        s = set(self).intersection(*otherlists)
+        return type(self)(o for o in self if o in s)
+
+    def union(self, *otherlists):
+        """ Return a list of atoms that appear in any lists (including this one).
+
+        Args:
+            *otherlists (Iterable): one or more lists of atoms
+
+        Returns:
+            moldesign.AtomList: union of this list of atoms with all passed lists of atoms.
+               Equivalent to concatenating all lists then removing duplicates
+        """
+        found = set()
+        newlist = type(self)()
+        for item in itertools.chain(self, *otherlists):
+            if item not in found:
+                found.add(item)
+                newlist.append(item)
+        return newlist
+
+    def unique(self):
+        """ Return only unique atoms from this list
+
+        Returns:
+            moldesign.AtomList: copy of this list without any duplicates. Preserves order.
+        """
+        return self.union()
+
+    def __sub__(self, other):
+        otherset = set(other)
+        return type(self)(atom for atom in self if atom not in otherset)
+
+    # alias for self so that this works with AtomContainer methods
     @property
     def atoms(self):
-        """This is a synonym for self so that AtomContainer methods will work here too"""
         return self
-
-    def __getslice__(self, *args, **kwargs):
-        return AtomList(super(AtomList, self).__getslice__(*args, **kwargs))

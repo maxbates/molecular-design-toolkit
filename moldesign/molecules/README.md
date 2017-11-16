@@ -1,5 +1,6 @@
-## Structure subpackage
-The `moldesign.molecule` subpackage contains class definitions for atomic, molecular, biomolecular, and trajectory data structures. 
+## Molecule subpackage
+The `moldesign.molecule` subpackage contains MDT's core molecular data structures.
+
 
 ### Naming and indexing conventions
 
@@ -7,10 +8,10 @@ The `moldesign.molecule` subpackage contains class definitions for atomic, molec
 We run into a lot of cases where there's more than one way to name or index something. For instance, do we store a molecule's residues as a normal python list, indexed at 0? Or do we use the sequence numbers from the PDB file?
 
 In the end, buckyball makes both available. Biologically relevant objects - atoms, chains, and residues, will each have a:
- * `name` - a short (1-5 character) string
- * `index` - the index in python lists
- * `pdbname` - the official name from the PDB
- * `pdbindex` - the serial # (for atoms), sequence number (for residues), or chain identifier
+ * `name` - descriptive name, _unique_ in its enclosing structure
+ * `index` - this object's list index in its molecule
+ * `pdbname` - the object's name in the PDB entry
+ * `pdbindex` - atom serial # or residue sequence number
  
 
 | object/ attribute | `Atom`  | `Residue`  | Chain  | Molecule |
@@ -23,16 +24,16 @@ In the end, buckyball makes both available. Biologically relevant objects - atom
 
 
 Here's how the python attributes correspond to an entry in a PDB file:
-```
+```  
+  chain.name == chain.pdbname     atom.x   atom.y  atom.z 
+                       |             |       |       |   
 ATOM     46   CB   ARG A  43      12.924  87.757  96.420  0.50 37.26           O
-          |   |    |  |   |                                                    |
-atom.pdbindex |    |  |  residue.pdbindex                                 atom.elem
-              |    | chain.name == chain.pdbindex == chain.pdbname
-              |   residue.pdbname
+          |   |    |      |                                                    |
+atom.pdbindex |    |    residue.pdbindex                                   atom.elem
+              |    | 
+              |   residue.resname == residue.pdbname
    atom.name == atom.pdbname
 ```
 
 #### Small molecules
-Small molecules can come from a variety of sources with a variety of different metadata available. If a given molecule is provided with PDB-type metadata, we'll name and index it according to the biomolecule conventions above.
-
-Other formats (like XYZ files or SMILES strings) don't contain as much metadata. For molecules created from these formats, a chain ("Z") and residue ("UNL1") will be automatically created. If the atom names are just the names of the elements (e.g., all carbon atoms are named C), atom.name will be automatically assigned as `"%s%d" % (atom.elem, atom.index)`.
+Small molecules can come from a variety of sources with a variety of different metadata available. If a given molecule is provided with PDB-type metadata, we'll name and index it according to the biomolecule conventions above. Otherwise, a 'placeholder' residue and chain will be created to hold the atoms. If the atom names are just the names of the elements (e.g., all carbon atoms are named C), atom.name will be automatically assigned as `"%s%d" % (atom.elem, atom.index)`.

@@ -1,54 +1,65 @@
-===========================================
-Molecular Design Toolkit: API documentation
-===========================================
+Molecular Design Toolkit |version|
+##################################
 
-These pages provide reference API documentation for the Molecular Design Toolkit.
-
-Just getting started? We recommend trying out `the tutorials and
-walkthroughs <http://bionano.autodesk.com/MolecularDesignToolkit/explore.html>`_ before diving into the API.
+The `Molecular Design Toolkit <http://moldesign.bionano.autodesk.com/>`_ offers access to a large and still-growing set of computational modeling methods with a science-focused Python API. When you
+call MDT functions from a Jupyter notebook, you'll also get inline 2D and 3D visualization,
+ready-to-plot data structures, and interactive user interfaces. MDT is free, open source, and built for scientific collaboration.
 
 
-Quick install
--------------
-Get the latest stable version:
-
-.. code-block:: bash
-
-   $ pip install moldesign
-
-Or get the source code on github:
-
-.. code-block:: bash
-
-   $ git clone github.com/autodesk/molecular-design-toolkit
+`Try a live demo now. <http://mybinder.org/repo/avirshup/mdt-gallery-test>`_
 
 
-Get started
------------
-At the command line, run
-
-.. code-block:: bash
-
-   $ python -m moldesign intro
 
 
-Explore the API
----------------
-The Jupyter online documentation system is a powerful tool for discovering functionality.
+.. toctree::
+   :maxdepth: 2
+   :numbered:
+   :caption: Getting started
 
-To get a list of all members of a module or class, type ``modulename.``, then hit `tab`.
-
-.. image:: img/tab_autocomplete.png
-
-To get online documentation about a function or method, type the method's name, then hit `shift+tab`
-
-.. image:: img/shifttab_online.png
-
-To get the complete docstring for any object, type its name then a question mark.
-
-.. image:: img/questiondoc.png
+   quickstart
+   features
+   install
 
 
-Get help
---------
-Click a link in the navigation menu (to your left) for in-depth documentation.
+.. toctree::
+   :maxdepth: 2
+   :numbered:
+   :caption: Recipes
+
+   creating_and_converting
+   structure
+   biomolecule
+   geometry
+   properties
+   dynamics
+   visualization
+
+
+.. toctree::
+   :maxdepth: 2
+   :numbered:
+   :caption: Physical object API
+
+   api/datastructures
+   api/molecule
+   api/biopolymer
+   api/wfn
+
+
+.. toctree::
+   :maxdepth: 1
+   :numbered:
+   :caption: Simulation and tools API
+
+   _mdt_api/moldesign.geom.rst
+   _mdt_api/moldesign.widgets.rst
+   _mdt_api/moldesign.tools.rst
+   _mdt_api/moldesign.models.rst
+   _mdt_api/moldesign.integrators.rst
+   _mdt_api/moldesign.data.rst
+
+
+
+
+* :ref:`Alphabetical index <genindex>`
+* :ref:`Search <search>`

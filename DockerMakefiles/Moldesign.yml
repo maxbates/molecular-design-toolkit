@@ -1,0 +1,78 @@
+moldesign_requirements:
+  requires:
+    - deploy_requirements
+  build: |
+    RUN conda install -qy -c omnia parmed biopython
+
+
+moldesign_minimal_requirements:
+ description: Base installation of the MDT library. Built from the current directory.
+ requires:
+  - moldesign_requirements
+ build_directory: ../
+ ignorefile: buildfiles/moldesign/moldesign.dockerignore
+ build: |
+  COPY requirements.txt /tmp/mdtreqs.txt
+  RUN apt-get update \
+   && apt-get install -y gcc \
+   && pip install -r /tmp/mdtreqs.txt
+  COPY . /opt/molecular-design-toolkit
+  WORKDIR /opt/molecular-design-toolkit
+  RUN python setup.py sdist && pip install `ls -t dist/*.tar.gz | head -n1`
+
+moldesign_minimal:
+  requires:
+    - miniconda
+    - moldesign_minimal_requirements
+
+moldesign_minimal_py2:
+  requires:
+    - miniconda_py2
+    - moldesign_minimal_requirements
+
+
+moldesign_complete_requirements:
+  description: An image with moldesign and all python dependencies
+  requires:
+   - chem_python_requirements
+   - moldesign_minimal_requirements
+
+moldesign_complete:
+  requires:
+    - miniconda
+    - moldesign_complete_requirements
+
+moldesign_complete_py2:
+  requires:
+    - miniconda_py2
+    - moldesign_complete_requirements
+
+
+moldesign_notebook:
+ description: A production-ready, fully outfitted jupyter server container
+ requires:
+  - moldesign_complete
+  - notebook
+ build: |
+  RUN adduser --disabled-password --gecos '' nbuser
+  RUN pip install nbmolviz==0.7.0rc4
+  USER nbuser
+  RUN python -m nbmolviz activate --user
+  USER root
+  RUN python -m moldesign copyexamples
+  RUN chmod -R a+rw .
+
+
+
+moldesign_stack:
+ description: An extra-large image with everything needed to run the example notebooks
+ build_directory: buildfiles/moldesign
+ requires:
+  - opsin
+  - symmol_base
+  - ambertools
+  - moldesign_notebook
+ build: |
+   USER nbuser
+   RUN mkdir -p /home/nbuser/.moldesign
+   ADD moldesign.yml /home/nbuser/.moldesign/moldesign.yml

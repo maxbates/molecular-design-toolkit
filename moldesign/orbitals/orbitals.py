@@ -1,4 +1,21 @@
-# Copyright 2016 Autodesk Inc.
+""" Class definitions for atomic and molecular orbitals.
+
+Notes:
+    In this documentation, we use the following conventions for labeling orbitals:
+      - atomic orbitals using lower case greek labels and subscripts, e.g.,
+          :math:`\left| \mu \right \rangle, F_{\nu \lambda}, etc.
+      - molecular orbitals use lower case labels and subscripts, e.g.,
+          :math:`\left| i \right \rangle, F_{kl}, etc.
+      - adiabatic electronic states are indexed using capital letters, _N_, _L_, _M_, etc.
+
+"""
+
+from __future__ import print_function, absolute_import, division
+from future.builtins import *
+from future import standard_library
+standard_library.install_aliases()
+
+# Copyright 2017 Autodesk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,24 +29,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""" Class definitions for atomic and molecular orbitals.
-
-Notes:
-    In this documentation, we use the following conventions for labeling orbitals:
-      - atomic orbitals using lower case greek labels and subscripts, e.g.,
-          :math:`\left| \mu \right \rangle, F_{\nu \lambda}, etc.
-      - molecular orbitals use lower case labels and subscripts, e.g.,
-          :math:`\left| i \right \rangle, F_{kl}, etc.
-      - adiabatic electronic states are indexed using capital letters, _N_, _L_, _M_, etc.
-
-"""
 import numpy as np
 
 from moldesign import units as u
 from moldesign.utils import Alias
 
 SHELLS = {0: 's', 1: 'p', 2: 'd', 3: 'f', 4: 'g', 5: 'h'}
-ANGMOM = {v: k for k, v in SHELLS.iteritems()}
+ANGMOM = {v: k for k, v in SHELLS.items()}
 
 # See https://en.wikipedia.org/wiki/Table_of_spherical_harmonics#Real_spherical_harmonics
 SPHERICALNAMES = {(0, 0): 's', (1, -1): 'p(x)', (1, 0): 'p(z)', (1, 1): 'p(y)',
@@ -38,15 +44,12 @@ SPHERICALNAMES = {(0, 0): 's', (1, -1): 'p(x)', (1, 0): 'p(z)', (1, 1): 'p(y)',
                   (3, -3): 'f(3yx^2-y^3)', (3, -2): 'f(xyz)', (3, -1): 'f(yz^2)',
                   (3, 0): 'f(z^3)', (3, 1): 'f(xz^2)', (3, 2): 'f(zx^2-zy^2)',
                   (3, 3): 'f(x^3-3xy^2)'}
-ANGULAR_NAME_TO_COMPONENT = {'': (0, 0), 'x': (1, -1), 'y': (1, 1), 'z': (1, 0),
+ANGULAR_NAME_TO_COMPONENT = {'': (0, 0), 'x': (1, 1), 'y': (1, -1), 'z': (1, 0),
                              'z^2': (2, 0), 'xy': (2, -2), 'yz': (2, -1), 'xz': (2, 1),
                              'x^2-y^2': (2, 2),
                              'zx^2-zy^2': (3, 2), 'xyz': (3, -2), 'z^3': (3, 0),
                              '3yx^2-y^3': (3, -3), 'x^3 - 3xy^2': (3, 3), 'xz^2': (3, 1),
                              'yz^2': (3, -1)}
-
-
-class ConvergenceError(Exception): pass
 
 
 class Orbital(object):
@@ -62,8 +65,7 @@ class Orbital(object):
     :math:`\left| \mu \right \rangle` are stored at ``self.basis``
     """
     def __init__(self, coeffs, basis=None, wfn=None,
-                 occupation=None, name='unnamed',
-                 **kwargs):
+                 occupation=None, name='unnamed'):
         """ Initialization:
 
         Args:
@@ -90,10 +92,6 @@ class Orbital(object):
         if self.basis is not None:
             assert len(self.coeffs) == len(self.basis)
 
-        # Assign arbitrary attributes
-        for k, v in kwargs.iteritems():
-            setattr(self, k, v)
-
     def overlap(self, other):
         """ Calculate overlap with another orbital
 
@@ -114,7 +112,7 @@ class Orbital(object):
         Returns:
             u.Scalar[energy]: fock matrix element
         """
-        return self.wfn.fock_ao.dot(other.coeffs).ldot(self.coeffs)  # use ldot to preserve units
+        return self.wfn.fock_ao.dot(other.coeffs).ldot(self.coeffs)  # uses ldot to preserve units
 
     @property
     def energy(self):
@@ -149,8 +147,7 @@ class MolecularOrbitals(object):
     """
     def __init__(self, orbitals, wfn=None, basis=None,
                  canonical=False,
-                 orbtype=None,
-                 **kwargs):
+                 orbtype=None):
         """ Initialization:
 
         Args:
@@ -194,9 +191,6 @@ class MolecularOrbitals(object):
         if canonical:
             self._set_cmo_names()
 
-        for k, v in kwargs.iteritems():
-            setattr(self, k, v)
-
     def align_phases(self, other, threshold=0.5, assert_same_type=True):
         """ Flip the signs of these orbitals to bring them into maximum coincidence
         with another set of orbitals
@@ -219,6 +213,19 @@ class MolecularOrbitals(object):
                 thisorb.coeffs *= -1.0
                 # TODO: print a warning if overlap is small?
 
+    def calc_eris(self):
+        """ Calculate electron repulsion integrals in this basis
+
+        Returns:
+            ERI4FoldTensor: table of electron repulsion integrals
+
+        Note:
+            Currently uses PySCF/libint to calculate the integrals, regardless of the program
+            that generated the wavefunction
+        """
+        from moldesign.interfaces.pyscf_interface import get_eris_in_basis
+        return get_eris_in_basis(self.wfn.aobasis, self.coeffs)
+
     def overlap(self, other):
         """ Calculate overlaps between this and another set of orbitals
 
@@ -226,7 +233,7 @@ class MolecularOrbitals(object):
             other (MolecularOrbitals):
 
         Returns:
-            numpy.array: overlaps between the two sets of orbitals.
+            numpy.ndarray: overlaps between the two sets of orbitals
 
         Example:
             >>> canonical = mol.wfn.canonical
@@ -235,7 +242,7 @@ class MolecularOrbitals(object):
             >>> overlaps[i, j] == canonical.orbitals[i].overlap(atomic.orbitals[j])
             True
         """
-        return self.dot(self.aobasis.overlaps.dot(other.T))
+        return self.coeffs.dot(self.wfn.aobasis.overlaps.dot(other.coeffs.T))
 
     def __iter__(self):
         return iter(self.orbitals)
@@ -253,12 +260,22 @@ class MolecularOrbitals(object):
     def __getitem__(self, item):
         return self.orbitals[item]
 
+    def _to_ao_density_matrix(self):
+        c = self.coeffs * self.occupations[:, None]/2.0
+        return 2.0*c.T.dot(c)
+
     @property
     def energies(self):
         """u.Vector[energy]: energies of the molecular orbitals
 
         This is just the diagonal of the fock matrix"""
         return self.fock.diagonal()
+
+    @property
+    def occupations(self):
+        """ np.ndarray: orbital occupation numbers
+        """
+        return np.array([orb.occupation for orb in self.orbitals])
 
     @property
     def fock(self):
@@ -356,3 +373,19 @@ class MolecularOrbitals(object):
                     orb.name = 'virt cmo %d' % i
 
 
+class ERI4FoldTensor(object):
+    def __init__(self, mat, basis_orbitals):
+        self.mat = mat
+        self.basis_orbitals = basis_orbitals
+        self.nbasis = len(self.basis_orbitals)
+        mapping = np.zeros((self.nbasis, self.nbasis), dtype='int')
+        ij = 0
+        for i in range(self.nbasis):
+            for j in range(i + 1):
+                mapping[i, j] = mapping[j, i] = ij
+                ij += 1
+        self.mapping = mapping
+
+    def __getitem__(self, item):
+        i, j, k, l = item
+        return self.mat[self.mapping[i, j], self.mapping[k, l]]

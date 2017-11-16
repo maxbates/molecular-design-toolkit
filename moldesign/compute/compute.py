@@ -1,4 +1,8 @@
-# Copyright 2016 Autodesk Inc.
+from __future__ import print_function, absolute_import, division
+from future.builtins import *
+from future import standard_library
+standard_library.install_aliases()
+# Copyright 2017 Autodesk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,10 +16,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import moldesign as mdt
-from moldesign import utils
+from .. import utils
+from ..helpers import display_log
 
+default_engine = None
 
-def get_image_path(image_name):
+def get_image_path(image_name, _devmode=None):
     """ Returns a fully qualified tag that points to the correct registry
 
     Args:
@@ -32,18 +38,26 @@ def get_image_path(image_name):
         >>> get_image_path('someimage')
         'docker.io/myorg/someimage:0.2
     """
-    from . import config
+    from .configuration import config
+
+    if _devmode is None:
+        _devmode = config.devmode
+
+    if _devmode:
+        return image_name + ':dev'
 
     if not config.default_repository:
         name = image_name
-    else:
+    elif config.default_repository[-1] in '/:':
         name = '%s%s' % (config.default_repository, image_name)
+    else:
+        name = '%s/%s' % (config.default_repository, image_name)
 
     if not config.default_repository:
         img = name
     elif config.default_repository[-1] == ':':
         img = '%s-%s' % (name, config.default_version_tag)
-    elif config.version_tag:
+    elif config.default_version_tag:
         img = '%s:%s' % (name, config.default_version_tag)
     else:
         raise ValueError('Faulty docker repository configuration not recognized')
@@ -74,7 +88,7 @@ class DummyJob(object):
             self.updated_object = updated_object
 
 
-def run_job(job, engine=None, image=None, wait=True, jobname=None, display=True,
+def run_job(job, engine=None, wait=True, jobname=None, display=True,
             _return_result=False):
     """ Helper for running jobs.
 
@@ -90,19 +104,27 @@ def run_job(job, engine=None, image=None, wait=True, jobname=None, display=True,
     Returns:
         pyccc job object OR function's return value
     """
+    import pyccc
 
-    engine = utils.if_not_none(engine, mdt.compute.get_engine())
+    # this is a hacky list of jobs that's mostly for debugging
+    mdt._lastjobs[mdt._njobs] = job
+    mdt._lastjobs[-1] = job
+    mdt._njobs += 1
 
-    if engine is None:
-        raise ValueError('No compute engine configured! Configure MDT using '
-                         'moldesign.compute.config')
+    if job.engine is None:
+        engine = utils.if_not_none(engine, mdt.compute.get_engine())
+        job.engine = engine
+        if engine is None:
+            raise ValueError('No compute engine configured! Configure MDT using '
+                             'moldesign.compute.config')
 
-    engine.submit(job)
+    if isinstance(job.engine, pyccc.engines.Docker):
+        check_pull_image(job.engine.client, job.image)
 
+    job.submit()
     jobname = utils.if_not_none(jobname, job.name)
-
     if display:
-        mdt.uibase.display_log(job.get_display_object(), jobname)
+        display_log(job.get_display_object(), jobname)
 
     if wait:
         job.wait()
@@ -111,7 +133,70 @@ def run_job(job, engine=None, image=None, wait=True, jobname=None, display=True,
     return job
 
 
+def check_pull_image(client, image):
+    from .. import widgets
+
+    if image_present(client, image):
+        return
+
+    elif widgets.nbmolviz_enabled:
+            from IPython.display import display
+            from nbmolviz.mdtconfig.images import DockerImageView
+            widget = DockerImageView(image, client)
+            display(widget)
+            widget.pull()
+
+    else:
+        # No fancy UI here, just print a message indicating that the image will be pulled
+        print('Pulling image "%s" from dockerhub ...' % image)
 
 
+def image_present(client, image):
+    from docker import errors
+    try:
+        imginfo = client.inspect_image(image)
+    except errors.ImageNotFound:
+        return False
+    else:
+        return True
+
+
+@utils.args_from(run_job, only='engine wait jobname display'.split())
+def runremotely(func, args=None, kwargs=None,
+                jobname=None, engine=None, image=None, wait=True, display=True,
+                persist_refs=True, when_finished=None):
+    """ Runs a python command remotely.
+
+    Args:
+        job (pyccc.Job): The job to run
+
+    Returns:
+        pyccc.PythonJob OR object: reference to the job if wait=False, or the function's
+           return value, if wait=True
+    """
+    import pyccc
+
+    if args is None:
+        args = []
+    if kwargs is None:
+        kwargs = {}
+
+    if image is None:
+        image = mdt.compute.config.default_python_image
+
+    if jobname is None:
+        jobname = func.__name__
+        if args:
+            jobname += str(args[0])
+
+    call = pyccc.PythonCall(func, *args, **kwargs)
+    job = pyccc.PythonJob(command=call, image=image, engine=engine, name=jobname,
+                          submit=False, persist_references=persist_refs,
+                          sendsource=False, when_finished=when_finished)
+    job = run_job(job, wait=wait, display=display)
+    if wait:
+        return job.result
+    else:
+        return job
 
 

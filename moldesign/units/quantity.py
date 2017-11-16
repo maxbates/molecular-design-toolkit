@@ -1,4 +1,9 @@
-# Copyright 2016 Autodesk Inc.
+from __future__ import print_function, absolute_import, division
+from future.builtins import *
+from future import standard_library
+standard_library.install_aliases()
+
+# Copyright 2017 Autodesk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,19 +16,23 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""
-Set up physical constants and unit systems
-"""
+from past.builtins import basestring
+
+import operator
 import copy
 from os.path import join, abspath, dirname
 
 import numpy as np
-from pint import UnitRegistry, set_application_registry, DimensionalityError
+from pint import UnitRegistry, set_application_registry, DimensionalityError, UndefinedUnitError
+
+from ..utils import ResizableArray
+
 
 # Set up pint's unit definitions
 ureg = UnitRegistry()
-unit_def_file = join(abspath(dirname(__file__)), '../_static_data/pint_atomic_units.txt')
+unit_def_file = join(abspath(dirname(__file__)), '..', '_static_data','pint_atomic_units.txt')
 ureg.load_definitions(unit_def_file)
+ureg.default_system = 'nano'
 set_application_registry(ureg)
 
 
@@ -33,6 +42,44 @@ class MdtUnit(ureg.Unit):
     """
     def __reduce__(self):
         return _get_unit, (str(self),)
+
+    @property
+    def units(self):
+        return self
+
+    def convert(self, value):
+        """ Returns quantity converted to these units
+
+        Args:
+            value (MdtQuantity or Numeric): value to convert
+
+        Returns:
+            MdtQuantity: converted value
+
+        Raises:
+            DimensionalityError: if the quantity does not have these units' dimensionality
+        """
+        if hasattr(value, 'to'):
+            return value.to(self)
+        elif self.dimensionless:
+            return value * self
+        else:
+            raise DimensionalityError('Cannot convert "%s" to units of "%s"' % (value, self))
+
+    def value_of(self, value):
+        """ Returns numeric value of the quantity in these units
+
+        Args:
+            value (MdtQuantity or Numeric): value to convert
+
+        Returns:
+            Numeric: value in this object's units
+
+        Raises:
+            DimensionalityError: if the quantity does not have these units' dimensionality
+        """
+        v = self.convert(value)
+        return v.magnitude
 
 
 def _get_unit(unitname):
@@ -45,7 +92,7 @@ class MdtQuantity(ureg.Quantity):
     This is a 'patched' version of pint's quantities that can be pickled (slightly hacky)
     and supports more numpy operations.
     Users should never need to instantiate this directly - instead, construct
-    BuckyBall quantities by multiplying numbers/arrays with the pre-defined units
+    MDT quantities by multiplying numbers/arrays with the pre-defined units
 
     Examples:
         >>> 5.0 * units.femtoseconds
@@ -77,51 +124,32 @@ class MdtQuantity(ureg.Quantity):
         memo[id(self)] = result
         return result
 
-    # This doesn't deal with length specs correctly (pint's doesn't either though)
-    #def __format__(self, fmt):
-    #    fmtstring = '{m:%s} {u}' % fmt
-    #    try:
-    #        return fmtstring.format(m=self.magnitude,
-    #                                u=self.units)
-    #    except:
-    #        return super(MdtQuantity, self).__format__(fmt)
+    def __hash__(self):
+        m = self._magnitude
+        if isinstance(m, np.ndarray) and m.shape == ():
+            m = float(m)
+        return hash((m, str(self.units)))
 
     def __setitem__(self, key, value):
-        # Overrides pint's built-in version of this ... this is apparently way faster
-        try:
-            self.magnitude[key] = value.value_in(self.units)
-        except AttributeError:
-            if not hasattr(value, 'value_in'):  # deal with missing `value_in` method
-                if self.dimensionless:  # case 1: this is OK if self is dimensionless
-                    self.magnitude[key] = value
-                else:  # case 2: User tried to pass a number without units
-                    raise DimensionalityError('%s cannot be assigned to array with dimensions %s' %
-                                              (value, self.units))
-            else:  # case 3: attribute error is unrelated to this
-                raise
+        from . import array as quantityarray
 
-    def to_json(self):
-        if hasattr(self.magnitude, 'tolist'):
-            mag = self.magnitude.tolist()
-        else:
-            mag = self.magnitude
-        return {'magnitude': mag,
-                'units': str(self.units)}
+        try:  # Speed up item assignment by overriding pint's implementation
+            if self.units == value.units:
+                self.magnitude[key] = value._magnitude
+            else:
+                self.magnitude[key] = value.value_in(self.units)
+        except AttributeError:
+            if isinstance(value, basestring):
+                raise TypeError("Cannot assign units to a string ('%s')"%value)
+
+            try:  # fallback to pint's implementation
+                super().__setitem__(key, value)
+            except (TypeError, ValueError):
+                # one last ditch effort to create a more well-behaved object
+                super().__setitem__(key, quantityarray(value))
 
     def __eq__(self, other):
-        """ Bug fixes and behavior changes for pint's implementation
-        These get removed as they are fixed in pint
-
-        Notes:
-            - Allow equality test between compatible units
-            - Allow comparisons to 0 to ignore units
-        """
-        if hasattr(other, 'value_in'):
-            return self.magnitude == other.value_in(self.units)
-        elif other == 0.0:  # ignore units
-            return self.magnitude == other
-        else:
-            return super(MdtQuantity, self).__eq__(other)
+        return self.compare(other, operator.eq)
 
     @property
     def shape(self):
@@ -133,12 +161,18 @@ class MdtQuantity(ureg.Quantity):
 
     def compare(self, other, op):
         """ Augments the :class:`pint._Quantity` method with the following features:
-          - Comparisons to 0 ignore units
+          - Comparisons to dimensionless 0 can proceed without unit checking
         """
-        if other == 0.0:
-            return op(self.magnitude, other)
+        other = MdtQuantity(other)
+        try:
+            iszero = other.magnitude == 0.0 and other.dimensionless
+        except ValueError:
+            iszero = False
+
+        if iszero:
+            return op(self.magnitude, other.magnitude)
         else:
-            return super(MdtQuantity, self).compare(other, op)
+            return op(self.magnitude, other.value_in(self.units))
 
     def get_units(self):
         """
@@ -146,7 +180,7 @@ class MdtQuantity(ureg.Quantity):
         """
         x = self
         while True:
-            try: x = x.__iter__().next()
+            try: x = next(x.__iter__())
             except (AttributeError, TypeError): break
         try:
             y = 1.0 * x
@@ -156,14 +190,28 @@ class MdtQuantity(ureg.Quantity):
             return 1.0
 
     def norm(self):
-        """Compute norm but respect units"""
+        """L2-norm of this object including units
+
+        Returns:
+            Scalar: L2-norm
+        """
         units = self.get_units()
         return units * np.linalg.norm(self._magnitude)
 
-    def dot(self, other):
-        """Compute norm but respect units
+    def normalized(self):
+        """ Normalizes a vector or matrix
+
         Returns:
-            MdtQuantity
+            np.ndarray: L2-normalized copy of this array (no units)
+        """
+        from ..mathutils import normalized
+        return normalized(self.magnitude)
+
+    def dot(self, other):
+        """ Dot product that correctly multiplies units
+
+        Returns:
+            Array
         """
         if hasattr(other, 'get_units'):
             units = self.get_units() * other.get_units()
@@ -172,6 +220,12 @@ class MdtQuantity(ureg.Quantity):
         return units * np.dot(self, other)
 
     def cross(self, other):
+        """ Cross product that correctly multiplies units
+
+        Returns:
+            Array
+        """
+
         if hasattr(other, 'get_units'):
             units = self.get_units() * other.get_units()
         else:
@@ -179,10 +233,21 @@ class MdtQuantity(ureg.Quantity):
         return units * np.cross(self, other)
 
     def ldot(self, other):
-        """
-        Left-multiplication version of dot.
-        Use this to preserve units (built-in numpy versions don't)
-        getting hackier ...
+        """ Left-multiplication version of dot that correctly multiplies units
+
+        This is mathematically equivalent to ``other.dot(self)``, but preserves units even if ``other``
+        is a plain numpy array
+
+        Args:
+            other (MdtQuantity or np.ndarray): quantity to take the dot product with
+
+        Examples:
+            >>> mat1 = np.ones((3,2))
+            >>> vec1 = np.array([-3.0,2.0]) * u.angstrom
+            >>> vec1.ldot(mat1)
+            <Quantity([-1. -1. -1.], 'ang')>
+            >>> # This won't work because "mat1", a numpy array, doesn't respect units
+            >>> mat1.dot(vec1)
         """
         if hasattr(other, 'get_units'):
             units = self.get_units() * other.get_units()
@@ -197,12 +262,11 @@ class MdtQuantity(ureg.Quantity):
         m = s_mag % o_mag
         return m * my_units
 
-    def value_in(self, units):
-        val = self.to(units)
-        return val._magnitude
+    # backwards-compatible name
+    value_in = ureg.Quantity.m_as
 
     def defunits_value(self):
-        return self.defunits()._magnitude
+        return self.defunits().magnitude
 
     # defunits = ureg.Quantity.to_base_units  # replacing this with the new pint implementation
     def defunits(self):
@@ -218,15 +282,51 @@ class MdtQuantity(ureg.Quantity):
         return self.ito(newunit)
 
     def to_simtk(self):
+        """ Return a SimTK quantity object
+        """
         from moldesign.interfaces.openmm import pint2simtk
         return pint2simtk(self)
+
+    def to_json(self):
+        """ Convert to a simple JSON format
+
+        Returns:
+            dict: ``{value: <float>, units: <str>}``
+
+        Examples:
+            >>> from moldesign.units import angstrom
+            >>> q = 1.0 * angstrom
+            >>> q.to_json()
+            {'units':'angstrom', value: 1.0}
+        """
+        mag = self.magnitude
+        if isinstance(mag, np.ndarray):
+            mag = mag.tolist()
+        return {'value': mag,
+                'units': str(self.units)}
+
+    def make_resizable(self):
+        self._magnitude = ResizableArray(self._magnitude)
+
+    def append(self, item):
+        from .tools import array
+        try:
+            mag = item.value_in(self.units)
+        except AttributeError:  # handles lists of quantities
+            mag = array(item).value_in(self.units)
+        self._magnitude.append(mag)
+
+    def extend(self, items):
+        from . import array
+        mags = array(items).value_in(self.units)
+        self._magnitude.append(mags)
 
 # monkeypatch pint's unit registry to return BuckyballQuantities
 ureg.Quantity = MdtQuantity
 ureg.Unit = MdtUnit
 
 # These synonyms are here solely so that we can write descriptive docstrings
-# TODO: use typing module to turn these into real abstract types
+# TODO: use typing module to turn these into real abstract types, with dimensional parameterization
 
 class Scalar(MdtQuantity):
     """ A scalar quantity (i.e., a single floating point number) with attached units
@@ -236,24 +336,24 @@ class Scalar(MdtQuantity):
 
 
 class Vector(MdtQuantity):
-    """ A vector quantity (i.e., a list of floats) with attached units, which behaves like a
-    1-dimensional numpy array
+    """ A vector quantity (i.e., a list of floats) with attached units that behaves like a
+    1-dimensional numpy array with units
     """
     def __init__(self, *args):
         raise NotImplementedError('This is an abstract class - use MdtQuantity instead')
 
 
 class Array(MdtQuantity):
-    """ A matrix quantity (i.e., a matrix of floats) with attached units, which behaves like a
-    2-dimensional numpy array
+    """ A matrix quantity (i.e., a matrix of floats) with attached units that behaves like a
+    2-dimensional numpy array with units
     """
     def __init__(self, *args):
         raise NotImplementedError('This is an abstract class - use MdtQuantity instead')
 
 
 class Tensor(MdtQuantity):
-    """ A vector quantity (i.e., a list of floats) with attached units, which behaves like a
-    multidimensional numpy array
+    """ A multidimensional array of floats with attached units that behaves like a
+    multidimensional numpy array with units
     """
     def __init__(self, *args):
         raise NotImplementedError('This is an abstract class - use MdtQuantity instead')

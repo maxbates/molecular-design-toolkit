@@ -1,0 +1,25 @@
+name: moldesign_env
+channels:
+ - omnia
+dependencies:
+ - biopython
+ - h5py
+ - markdown2
+ - matplotlib
+ - numpy
+ - parmed >= 2.0.0
+ - pint >= 0.7
+ - pytest
+ - pyyaml
+ - requests
+ - scipy
+ - "openbabel>=2.3,<2000"  # don't use old versions that were marked as "2015.X.Y"
+ - openmm
+ - pip:
+   - webcolors
+   - funcsigs
+   - git+https://github.com/sunqm/pyscf@v1.3.1
+   - docker-py
+   - fortranformat
+   - pyccc >= 0.7.4
+

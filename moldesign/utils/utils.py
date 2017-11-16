@@ -1,42 +1,22 @@
-"""
-My standard utilities. Intended to be included in all projects
-Obviously everything included here needs to be in the standard library (or numpy)
-"""
-import contextlib
+from __future__ import print_function, absolute_import, division
+from future.builtins import *
+from future import standard_library
+standard_library.install_aliases()
+
+import future.utils
+
+from functools import reduce
 import fractions
 import operator
 import os
 import re
-import shutil
-import string
 import sys
 import tempfile
-import threading
-from cStringIO import StringIO
-from uuid import uuid4
-
-import webcolors
+from html.parser import HTMLParser
 
 
-def make_none(): return None
-
-
-@contextlib.contextmanager
-def recursionlimit_atleast(n=1000):
-    """Context manager for temporarily raising the context manager's
-    the interpreter's maximum call stack size (misleading called the ``recursion limit``)
-
-    Notes:
-        This will explicitly reset the the recursion limit when we exit the context;
-            any intermediate recursion limit changes will be lost
-        This will not lower the limit ``n`` is less than the current recursion limit.
-    """
-    current_limit = sys.getrecursionlimit()
-    if n >= current_limit:
-        sys.setrecursionlimit(n)
-    yield
-    sys.setrecursionlimit(current_limit)
-
+def make_none(*args, **kwargs):
+    return None
 
 def if_not_none(item, default):
     """ Equivalent to `item if item is not None else default` """
@@ -46,12 +26,155 @@ def if_not_none(item, default):
         return item
 
 
+class MLStripper(HTMLParser):
+    """ Strips markup language tags from a string.
+
+    FROM http://stackoverflow.com/a/925630/1958900
+    """
+    def __init__(self):
+        if not future.utils.PY2:
+            super().__init__()
+        self.reset()
+        self.fed = []
+        self.strict = False
+        self.convert_charrefs = True
+
+    def handle_data(self, d):
+        self.fed.append(d)
+
+    def get_data(self):
+        return ''.join(self.fed)
+
+
+def html_to_text(html):
+    """
+    FROM http://stackoverflow.com/a/925630/1958900
+    """
+    s = MLStripper()
+    s.unescape = True  # convert HTML entities to text
+    s.feed(html)
+    return s.get_data()
+
+
 def printflush(s, newline=True):
     if newline:
-        print s
+        print(s)
     else:
-        print s,
+        print(s, end=' ')
     sys.stdout.flush()
+
+
+def which(cmd, mode=os.F_OK | os.X_OK, path=None):
+    """Given a command, mode, and a PATH string, return the path which
+    conforms to the given mode on the PATH, or None if there is no such
+    file.
+    `mode` defaults to os.F_OK | os.X_OK. `path` defaults to the result
+    of os.environ.get("PATH"), or can be overridden with a custom search
+    path.
+
+    Note:
+        Copied without modification from Python 3.6.1 ``shutil.which`
+        source code
+    """
+    # Check that a given file can be accessed with the correct mode.
+    # Additionally check that `file` is not a directory, as on Windows
+    # directories pass the os.access check.
+    def _access_check(fn, mode):
+        return (os.path.exists(fn) and os.access(fn, mode)
+                and not os.path.isdir(fn))
+
+    # If we're given a path with a directory part, look it up directly rather
+    # than referring to PATH directories. This includes checking relative to the
+    # current directory, e.g. ./script
+    if os.path.dirname(cmd):
+        if _access_check(cmd, mode):
+            return cmd
+        return None
+
+    if path is None:
+        path = os.environ.get("PATH", os.defpath)
+    if not path:
+        return None
+    path = path.split(os.pathsep)
+
+    if sys.platform == "win32":
+        # The current directory takes precedence on Windows.
+        if not os.curdir in path:
+            path.insert(0, os.curdir)
+
+        # PATHEXT is necessary to check on Windows.
+        pathext = os.environ.get("PATHEXT", "").split(os.pathsep)
+        # See if the given file matches any of the expected path extensions.
+        # This will allow us to short circuit when given "python.exe".
+        # If it does match, only test that one, otherwise we have to try
+        # others.
+        if any(cmd.lower().endswith(ext.lower()) for ext in pathext):
+            files = [cmd]
+        else:
+            files = [cmd + ext for ext in pathext]
+    else:
+        # On other platforms you don't have things like PATHEXT to tell you
+        # what file suffixes are executable, so just pass on cmd as-is.
+        files = [cmd]
+
+    seen = set()
+    for dir in path:
+        normdir = os.path.normcase(dir)
+        if not normdir in seen:
+            seen.add(normdir)
+            for thefile in files:
+                name = os.path.join(dir, thefile)
+                if _access_check(name, mode):
+                    return name
+    return None
+
+
+
+class methodcaller(object):
+    """The pickleable implementation of the standard library operator.methodcaller.
+
+    This was copied without modification from:
+    https://github.com/python/cpython/blob/065990fa5bd30fb3ca61b90adebc7d8cb3f16b5a/Lib/operator.py
+
+    The c-extension version is not pickleable, so we keep a copy of the pure-python standard library
+    code here. See https://bugs.python.org/issue22955
+
+    Original documentation:
+    Return a callable object that calls the given method on its operand.
+    After f = methodcaller('name'), the call f(r) returns r.name().
+    After g = methodcaller('name', 'date', foo=1), the call g(r) returns
+    r.name('date', foo=1).
+    """
+    __slots__ = ('_name', '_args', '_kwargs')
+
+    def __init__(*args, **kwargs):
+        if len(args) < 2:
+            msg = "methodcaller needs at least one argument, the method name"
+            raise TypeError(msg)
+        self = args[0]
+        self._name = args[1]
+        if not isinstance(self._name, future.utils.native_str):
+            raise TypeError('method name must be a string')
+        self._args = args[2:]
+        self._kwargs = kwargs
+
+    def __call__(self, obj):
+        return getattr(obj, self._name)(*self._args, **self._kwargs)
+
+    def __repr__(self):
+        args = [repr(self._name)]
+        args.extend(list(map(repr, self._args)))
+        args.extend('%s=%r' % (k, v) for k, v in list(self._kwargs.items()))
+        return '%s.%s(%s)' % (self.__class__.__module__,
+                              self.__class__.__name__,
+                              ', '.join(args))
+
+    def __reduce__(self):
+        if not self._kwargs:
+            return self.__class__, (self._name,) + self._args
+        else:
+            from functools import partial
+            return partial(self.__class__, self._name, **self._kwargs), self._args
 
 
 class textnotify(object):
@@ -85,100 +208,6 @@ class textnotify(object):
             printflush('ERROR')
 
 
-class progressbar(object):
-    """ Create a progress bar for a calculation
-
-    The context manager provides a callback which needs to be called as
-    set_progress(percent), where percent is a number between 0 and 100
-
-    Examples:
-        >>> import time
-        >>> with progressbar('count to 100') as set_progress:
-        >>>     for i in xrange(100):
-        >>>         time.sleep(0.5)
-        >>>         set_progress(i+1)
-    """
-    def __init__(self, description):
-        import ipywidgets as ipy
-        import traitlets
-        try:
-            self.progress_bar = ipy.FloatProgress(0, min=0, max=100, description=description)
-        except traitlets.TraitError:
-            self.progress_bar = None
-
-    def __enter__(self):
-        from IPython.display import display
-        if self.progress_bar is not None:
-            display(self.progress_bar)
-        return self.set_progress
-
-    def set_progress(self, percent):
-        if self.progress_bar is not None:
-            self.progress_bar.value = percent
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.progress_bar is not None:
-            self.value = 100.0
-            if exc_type is not None:
-                self.progress_bar.bar_style = 'danger'
-            else:
-                self.progress_bar.bar_style = 'success'
-
-
-class PipedFile(object):
-    """
-    Allows us to pass data by filesystem path without ever writing it to disk
-    To prevent deadlock, we spawn a thread to write to the pipe
-    Call it as a context manager:
-    >>> with PipedFile('file contents',filename='contents.txt') as pipepath:
-    >>>     print open(pipepath,'r').read()
-    """
-    def __init__(self, fileobj, filename='pipe'):
-        if type(fileobj) in (unicode,str):
-            self.fileobj = StringIO(fileobj)
-        else:
-            self.fileobj = fileobj
-        self.tempdir = None
-        assert '/' not in filename,"Filename must not include directory"
-        self.filename = filename
-
-    def __enter__(self):
-        self.tempdir = tempfile.mkdtemp()
-        self.pipe_path = os.path.join(self.tempdir, self.filename)
-        os.mkfifo(self.pipe_path)
-        self.pipe_thread = threading.Thread(target=self._write_to_pipe)
-        self.pipe_thread.start()
-        return self.pipe_path
-
-    def _write_to_pipe(self):
-        with open(self.pipe_path,'w') as pipe:
-            pipe.write(self.fileobj.read())
-
-    def __exit__(self, type, value, traceback):
-        if self.tempdir is not None:
-            shutil.rmtree(self.tempdir)
-
-
-def remove_directories(list_of_paths):
-    """
-    Removes non-leafs from a list of directory paths
-    """
-    found_dirs = set('/')
-    for path in list_of_paths:
-        dirs = path.strip().split('/')
-        for i in xrange(2, len(dirs)):
-            found_dirs.add('/'.join(dirs[:i]))
-
-    paths = [path for path in list_of_paths if
-             (path.strip() not in found_dirs) and path.strip()[-1] != '/']
-    return paths
-
-
-def make_local_temp_dir():
-    tempdir = '/tmp/%s' % uuid4()
-    os.mkdir(tempdir)
-    return tempdir
-
 
 class BaseTable(object):
     def __init__(self, categories, fileobj=None):
@@ -202,34 +231,9 @@ class BaseTable(object):
         raise NotImplementedError()
 
 
-class PrintTable(BaseTable):
-    def __init__(self, formatstr, fileobj=sys.stdout):
-        self.format = formatstr
-        categories = []
-        self._wrote_header = False
-        for field in string.Formatter().parse(formatstr):
-            key = field.split('.')[0]
-            categories.append(key)
-        super(PrintTable, self).__init__(categories, fileobj=fileobj)
-
-    def writeline(self, line):
-        if not self._wrote_header:
-            print >> self._fileobj, self.format.format(self.categories)
-            self._wrote_header = True
-
-        if self.fileobj is None: return
-        print >> self.fileobj, self.formatstr.format(**line)
-
-    def getstring(self):
-        s = StringIO()
-        for line in self.lines:
-            print >> s, self.format.format(line)
-        return s.getvalue()
-
-
 class MarkdownTable(BaseTable):
     def __init__(self, *categories):
-        super(MarkdownTable, self).__init__(categories)
+        super().__init__(categories)
 
     def markdown(self, replace=None):
         if replace is None: replace = {}
@@ -303,11 +307,6 @@ class _RedirectStream(object):
         setattr(sys, self._stream, self._old_targets.pop())
 
 
-class redirect_stdout(_RedirectStream):
-    """From python3.4 stdlib"""
-    _stream = "stdout"
-
-
 class redirect_stderr(_RedirectStream):
     """From python3.4 stdlib"""
     _stream = "stderr"
@@ -316,37 +315,14 @@ class redirect_stderr(_RedirectStream):
 GETFLOAT = re.compile(r'-?\d+(\.\d+)?(e[-+]?\d+)')  # matches numbers, e.g. 1, -2.0, 3.5e50, 0.001e-10
 
 
-def is_color(s):
-    """ Do our best to determine if "s" is a color spec that can be converted to hex
-    :param s:
-    :return:
-    """
-    def in_range(i): return 0 <= i <= int('0xFFFFFF', 0)
-
-    try:
-        if type(s) == int:
-            return in_range(s)
-        elif type(s) not in (str, unicode):
-            return False
-        elif s in webcolors.css3_names_to_hex:
-            return True
-        elif s[0] == '#':
-            return in_range(int('0x' + s[1:], 0))
-        elif s[0:2] == '0x':
-            return in_range(int(s, 0))
-        elif len(s) == 6:
-            return in_range(int('0x' + s, 0))
-    except ValueError:
-        return False
-
-
 def from_filepath(func, filelike):
     """Run func on a temporary *path* assigned to filelike"""
     if type(filelike) == str:
         return func(filelike)
     else:
         with tempfile.NamedTemporaryFile() as outfile:
-            outfile.write(filelike.read())
+            outfile.write(filelike.read().encode())  # hack - prob need to detect bytes
             outfile.flush()
             result = func(outfile.name)
         return result
+

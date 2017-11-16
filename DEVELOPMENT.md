@@ -1,61 +1,50 @@
-# Programming guidelines
+# DEVELOPING MDT
 
-### Principles
- 1. Users are **scientists, not programmers**. They'll need to know enough python to accomplish their science, but Molecular Design Toolkit (MDT) users may never know (or want to know) what a metaclass is or even how a web page works. Most workflows should be accomplishable without deep python or programming skills.
- 1. Build **power tools for competent computational chemists** - users need customizable, introspectable, and composable tools to build complex simulation workflows. We can support users with good documentation, great examples, and sensible defaults (e.g., well-chosen convergence parameters, proper timesteps).
- 1. Prefer a **clean, stable API** above all else. MDT's python API *is* its user interface. A good implementation is one that produces a good interface.
- 1. When in doubt, strive for **usability and user-friendliness**
+### Setting up a dev environment
+(still under construction)
 
-### Make information accessible and intuitive
-MDT is designed, as much as possible, to allow users to interactively explore molecular systems. Here are some of the ways we try to make the API an intuitive experience:
- 1. **Write for autocomplete**: users should be encouraged to type a couple letters then hit `tab`, even if they don't know exactly what they're looking for 
- 1. **Keep namespaces flat**: don't make users hunt for a piece of data - make it accessible from the highest-level logical location (`mol.aobasis`, not  `mol.electronic_wavefunction.orbitals.aobasis`)
- 1. **Add specific, use-case-based sugar** - e.g., users will frequently create lists of different types of residues. It's easier to type `waters = mol.get_residues(type='water')` than it is to type `waters = [res for res in mol.residues if res.type == 'water']`. If this is a *really common* use case, consider adding `mol.get_water_residues()`.
- 1. **Use readable names**: long, descriptive names (`mol.calculate_potential_energy()`) are preferable to short, cryptic ones (`mol.calc_pe()`). Using jupyter means that everyone has access to autocomplete.
- 1. **Give users lists, not iterators**: iterators are the enemies of easily-accessible data.  No one wants to type `list(mol.atoms())[3]`, or even worse, `[atom for atom in mol.atoms() if atom.idx==3][0]`. Expose an explicit iterator method if you really need to.
- 1. **Expose lightweight data as attributes and with `@property`** - Users should be able to access any available data - the number of atoms, precalculated forces, or a molecule's kinetic energy, for instance - in a single line of code *without an explicit function call*. For many molecular quantities (such as the number of degrees of freedom in a molecule), we use descriptors and `@property`s to make them immediately accessible to the user. The principle data structures - `Molecule`s, `Atom`s and `BioUnit`s - all make liberal use of descriptors and `@property`s.
-     * NO: `ke = mol.get_kinetic_energy()`
-     * YES: `ke = mol.kinetic_energy`
-     * NO: `chain = list(mol.getChains())[0]; residue = chain.getResidues(seqidx=35)[0]`
-     * YES: `res = mol.chains['A'].residues['ALA35']`
- 1. **Expose heavy-duty computation as methods** - A potential energy calculation could take anywhere from milliseconds to days. This should NOT be triggered by a user accessing `mol.potential_energy`; instead, they should call `mol.calculate_potential_energy()`.
+### Install prequisites (first time only)
+You need to install docker, and an environment manager for Python 3 (Miniconda 3). Here's one way to do that:
+1. Install docker: [link]
+2. Install pyenv and pyenv-venv: [link]
+3. Install miniconda3 by running: `pyenv install miniconda3-latest`
+4. Switch to miniconda environment by running: `pyenv shell miniconda3-latest`
 
-### Keeping the API clean, flat, and Jupyter-friendly
-1. The **top level `moldesign` namespace** should contain everything the user will need:<br> 
-   - YES: `moldesign.[name]`, e.g. `moldesign.from_smiles`
-   - NO: `moldesign.[name1].[name2].[name3]`, e.g. `moldesign.interfaces.openbabel.from_smiles`
-1. Use **delegation** to flatten complex objects: override `__getattr__` to allow an object to call its attributes' methods.<br>
-   - YES: `trajectory.set_style('vdw')`
-   - NO: `trajectory.viewer.set_style('vdw')`
-1. Make sure **autocomplete and pop-up docstrings** are useful:
-   - If you override `__getattr__`, also override `__dir__` to enable Jupyter's autocomplete functions.
-   - Use **explicit function signatures** whenever possible (e.g., avoid `my_func(*args, **kwargs)`) so that Jupyter can provide a useful call signature. (possibly use the `decorators` module to copy call signatures?)
-1. **Synonyms** - users shouldn't have to look at the documentation to figure out if it's `mol.numatoms`, `mol.natoms`, or `mol.num_atoms`. It's totally fine, even preferable, to have these all be the same thing (use `@property` to make sure that they are all equivalent).
-1. **Keep links to related objects** - if an atom belongs to a molecule, make it accessible as `atom.molecule`. This will create lots of circular composition (cases where `object1.child is child.object1`) - this is fine.
-1. **Don't clutter namespaces**:
-   - *objects:* use underscores to hide objects' internal variables:<br>*ex:* `trajectory._position_cache`, not `trajectory.position_cache`
-   - *modules:* use the `__all__` attribute in all submodules to define what gets imported to the top-level namespace.
- 
-### Prefer composition to inheritance
-Even advanced programmers have difficulty understanding complex inheritance trees, and python's syntax for passing arguments to superclasses only adds to the confusion. Whenever possible, build complex objects using composition instead of inheritance. Use attribute delegation (override `__getattr__` if necessary - see above) to keep the object's namespace flat.
-
-For example, the `TrajectoryViewer` class incorporates both a `GeometryViewer` and several ipywidgets. These are all set up as attributes of the `TrajectoryViewer` class: 
-```python
-trajview = TrajectoryViewer( mol )
-trajview.viewer  # GeometryViewer object
-trajview.slider  # ipywidget float slider
-trajview.frameinspector  # bb.ui.FrameInspector object
+### Set up your environment (first time only)
+1. Get MDT: `git clone http://github.com/Autodesk/molecular-design-toolkit`
+1. `cd molecular-design-toolkit`
+1. Create conda environment (optional but recommended) by running: [command to create conda env]
+2. Activate the environment: `pyenv activate [environment name???]`
+1. Install dev dependencies: `pip install -r requirements.txt DockerMakefiles/requirements.txt deployment/requirements.txt`
+2. Set up for local dev mode (this tells MDT to use your local docker containers):
+```bash
+mkdir ~/.moldesign
+echo "devmode: true" > ~/.moldesign/moldesign.yml
+```
+8. Install MDT in "development mode": 
+```
+pip install -e molecular-design-toolkit
 ```
 
-To keep the namespace flat, `TrajectoryViewer` objects delegate calls to their viewer: `TrajectoryViewer.vdw()` is a synonym for `TrajectectoryViewer.viewer.vdw()`.<br>Similarly, for a `Molecule` object `mol = Molecule()`,  `Molecule.atomic_number` is a synonym for `[atom.atomic_number for atom in Molecule.atoms]`.
+### To activate environment (in any new shell)
+1. Run `pyenv activate [environment name???]`
 
-### Some inheritance is OK
-Use inheritance when it makes sense and is easy to understand. For example:
+### To rebuild docker images (first time and after changes that affect dockerized code)
+5. Build development versions of all docker images:
+```bash
+cd DockerMakefiles
+docker-make --all --tag dev
+```
 
-1. Use **abstract base classes** to define interfaces -- e.g., all energy models derive from the abstract `EnergyModelBase`, because they all offer `.prep`, `.calculate`, `.DEFAULT_PROPERTIES`, etc. Similarly, `Residue` and `Chain` both inherit from `BioUnit`.
-   * But don't use the built-in `abc` module, which requires too much conceptual overhead for too little benefit
-1. **Mixins** - defining a set of methods that should work with a variety of classes (e.g., the `AtomContainer` class is mixed into `Atom`, `AtomList`, `BioUnit`, and `Molecule`, giving all of these classes access to `self.distance`, `self.copy_topology`. We're also using "trivial mix-ins" (designed just to mix together one big class) to help organize the `Atom` and `Molecule` types.
-1. **When it makes sense** - complex inheritance is preferable to code duplication. Sometimes it really is the best answer.
+### To run tests
+```bash
+cd molecular-design-toolkit/moldesign/_tests
+py.test -n [number of concurrent tests]
+```
+
+See [the testing README](moldesign/_tests/README.md) for more details.
+
+
  
 ### Code style
 1. Functions and variables should be `lowercase_with_underscores`. Class names and constructors should be `CapitalizedCamelCase`.
@@ -79,3 +68,45 @@ Established techniques and general simulation tools that will be useful for **3-
  * Visualization and UI: visualizations for specific systems (not generally applicable); 
 
 
+# Development guidelines
+
+### Whenever commiting changes anywhere
+
+Make SURE that you've run `nb-output-filter.sh` at the project base. You only need to do this once (per copy of the repository). This will make sure that you don't accidentally commit any `ipynb` output fields into the repository. You can check to make sure the filters are working by running `git diff` on any notebook file that has output in it: all `output` and `metadata` fields should remain blank.
+
+
+### Maintainers: Accepting a PR
+
+Work can be merged into `master` or a feature branch, as appropriate. Don't merge broken code
+into master, but it doesn't need to be totally production-ready either: only releases (below)
+are considered "stable".
+
+1. Review the code.
+1. Make sure that there's appropriate functional tests.
+1. Check that the travis build is at least running all the way to the end. The tests don't *necessarily* need to pass, but you need to undertand why  what's passing and what's not.
+
+
+### Releases
+
+1. Decide on the new version number (see below). For our purposes here, we'll pretend it's `0.9.3`.
+1. Tag the relevant commit (the build must be passing) with a release candidate version number, e.g., `0.9.3rc1`.
+1. Codeship will automatically deploy the updated release to PyPI and DockerHub
+1. Manually test the example notebooks against this pre-release version.
+1. If succesful, tag the relevant commit with the official release version `0.9.3`
+
+### Versioning
+For now, we're using a subset [PEP 440](https://www.python.org/dev/peps/pep-0440/):
+1. Every release should be of the form MAJOR.MINOR.PATCH, e.g. `0.1.2`
+2. Pre-releases should be numbered consecutively, and may be alpha, beta, or "release candidate", e.g. `1.0.1rc3` or `0.5.3a1`
+3. Our deployment infrastructure uses this regular expression to accept version strings:
+`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)((a|rc|b)(0|[1-9]\d*))?$`
+
+### Maintainers: updating the documentation
+
+Documentation is NOT coupled to the package releases; docs tend to get updated continuously.
+
+1. In the `master` branch, update the version numbers in `docs/conf.py`
+1. Run `cd docs; make clean; make html`. 
+1. In a separate directory, check out a fresh copy of the repo and run `git checkout gh-pages`
+1. Copy the contents of `[master branch]/docs/_build/html` into the root of the `gh-pages` branch.
+1. Commit your changes to the `gh-pages` branch and push them back to GitHub.

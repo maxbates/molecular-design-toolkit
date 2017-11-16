@@ -1,4 +1,9 @@
-# Copyright 2016 Autodesk Inc.
+from __future__ import print_function, absolute_import, division
+from future.builtins import *
+from future import standard_library
+standard_library.install_aliases()
+
+# Copyright 2017 Autodesk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,7 +40,7 @@ def distance_gradient(a1, a2):
         Tuple[u.Vector[length], u.Vector[length]]: (gradient w.r.t. first atom, gradient w.r.t.
         second atom)
     """
-    d = normalized(a1.position-a2.position)
+    d = normalized(a1.position-a2.position) * u.ureg.dimensionless
     return d, -d
 
 
@@ -96,4 +101,17 @@ def dihedral_gradient(a1, a2, a3, a4):
     vec2 = vec1 * (pijkj - 1.0) - vec4 * pklkj
     vec3 = vec4 * (pklkj - 1.0) - vec1 * pijkj
 
-    return vec1 * u.radians, vec2 * u.radians, vec3 * u.radians, vec4 * u.radians
+    return -vec1 * u.radians, -vec2 * u.radians, -vec3 * u.radians, -vec4 * u.radians
+
+
+def _atom_grad_to_mol_grad(atoms, grads):
+    """ Convert list of gradients on atoms to a full-dimensional Nx3 gradient list (with 0s for
+    uninvolved atoms)
+    """
+    m = atoms[0].molecule
+    if len(grads) != len(atoms):
+        raise ValueError('Number of gradients does not match number of atoms')
+    mol_grad = np.zeros((m.num_atoms, 3))*grads[0].get_units()
+    for v, a in zip(grads, atoms):
+        mol_grad[a.index] = v
+    return mol_grad

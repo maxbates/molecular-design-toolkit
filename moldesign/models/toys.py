@@ -1,4 +1,9 @@
-# Copyright 2016 Autodesk Inc.
+from __future__ import print_function, absolute_import, division
+from future.builtins import *
+from future import standard_library
+standard_library.install_aliases()
+
+# Copyright 2017 Autodesk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,23 +18,27 @@
 # limitations under the License.
 import numpy as np
 
-from moldesign import units as u
+import moldesign as mdt
+from .. import units as u
+from ..utils import exports
 from .base import EnergyModelBase
-
-
-def exports(o):
-    __all__.append(o.__name__)
-    return o
-__all__ = []
 
 
 @exports
 class Spring(EnergyModelBase):
     """Two atoms attached by a spring"""
-    def __init__(self, d0, k):
-        self.d0 = d0
-        self.k = k
-        super(Spring, self).__init__()
+
+    DEFAULT_PROPERTIES = ['potential_energy',
+                          'force']
+    ALL_PROPERTIES = DEFAULT_PROPERTIES
+
+    PARAMETERS = [
+        mdt.parameters.Parameter(
+            'k', 'Spring constant',
+            type=u.eV/u.angstrom**2),
+        mdt.parameters.Parameter(
+            'd0', 'Equilibrium distance',
+            type=u.angstrom)]
 
     def prep(self):
         assert self.mol.natoms == 2
@@ -38,8 +47,8 @@ class Spring(EnergyModelBase):
     def calculate(self, requests):
         dvec = self.mol.atoms[1].position - self.mol.atoms[0].position
         dist = np.sqrt(dvec.dot(dvec))
-        pe = 0.5 * self.k * (dist - self.d0)**2
-        f = self.k * dvec * (dist - self.d0) / dist
+        pe = 0.5 * self.params.k * (dist - self.params.d0)**2
+        f = self.params.k * dvec * (dist - self.params.d0) / dist
         forcearray = u.array([f, -f])
         return {'potential_energy': pe,
                 'forces': forcearray}
@@ -49,14 +58,19 @@ class Spring(EnergyModelBase):
 class HarmonicOscillator(EnergyModelBase):
     """ Applies a harmonic potential (centered at 0) to the x-component of every atom
     """
-    def __init__(self, k):
-        self.k = k
-        assert k.dimensionality == {'[mass]': 1,
-                                    '[time]': -2}
-        super(EnergyModelBase,self).__init__()
+    PARAMETERS = [
+        mdt.parameters.Parameter(
+            'k', 'Spring constant',
+            type=u.eV/u.angstrom**2)]
+
+    def prep(self):
+        if self.params.k.dimensionality != (u.eV/u.angstrom**2).dimensionality:
+            raise u.DimensionalityError("Spring constant must have dimensions of energy/length^2")
+        return True
 
     def calculate(self, requests):
-        energy = 0.5 * self.k * np.sum(self.mol.positions[:, 0]**2)
-        forces = np.zeros((self.mol.num_atoms, 3)) * u.hartree / u.bohr
-        forces[:, 0] = - self.k * self.mol.positions[:, 0]
+        self.prep()
+        energy = 0.5 * self.params.k * np.sum(self.mol.positions[:, 0]**2)
+        forces = np.zeros((self.mol.num_atoms, 3)) * u.default.force
+        forces[:, 0] = - self.params.k * self.mol.positions[:, 0]
         return dict(potential_energy=energy, forces=forces)

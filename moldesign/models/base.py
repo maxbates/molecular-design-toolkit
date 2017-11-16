@@ -1,4 +1,9 @@
-# Copyright 2016 Autodesk Inc.
+from __future__ import print_function, absolute_import, division
+from future.builtins import *
+from future import standard_library
+standard_library.install_aliases()
+
+# Copyright 2017 Autodesk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,12 +17,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import itertools
+
 import numpy as np
 
 import moldesign as mdt
-from moldesign import units as u
-from moldesign.parameters import mm_model_parameters as mmp, qm_model_parameters as qmp
-from moldesign.method import Method
+from .. import units as u
+from ..method import Method
 
 
 class EnergyModelBase(Method):
@@ -34,6 +39,8 @@ class EnergyModelBase(Method):
     """List[str]: List of all the properties that this model can calculate"""
 
     PARAMETERS = []
+
+    _CALLS_MDT_IN_DOCKER = False  # gets set to true if a python-interfaced dependency is missing
 
     def calculate(self, requests):
         """Calculate the the default properties and any additiona requests
@@ -61,9 +68,9 @@ class EnergyModelBase(Method):
              u.Scalar[charge]: the formal charge used for this model
         """
         if 'charge' in self.params and self.params.charge is not None:
-            return self.params.charge
+            return self.params.charge.value_in(u.q_e)
         elif hasattr(self.mol, 'charge'):
-            return self.mol.charge
+            return self.mol.charge.value_in(u.q_e)
         else:
             return 0
 
@@ -87,10 +94,10 @@ class EnergyModelBase(Method):
         else:
             assert direction == 0, 'Finite difference direction must be -1, 0, or 1'
 
-        for iatom, idim in itertools.product(xrange(self.mol.num_atoms), xrange(3)):
-            print '\rFinite differencing %s for atom %d/%d'%('xyz'[iatom],
+        for iatom, idim in itertools.product(range(self.mol.num_atoms), range(3)):
+            print('\rFinite differencing %s for atom %d/%d'%('xyz'[iatom],
                                                              iatom+1,
-                                                             self.mol.num_atoms),
+                                                             self.mol.num_atoms), end=' ')
             if direction == 0:
                 self.mol.positions[iatom, idim] += stepsize / 2.0
                 eplus = self.mol.calc_potential_energy()
@@ -123,15 +130,18 @@ class EnergyModelBase(Method):
 class MMBase(EnergyModelBase):
     """Common interface for molecular mechanics"""
 
-    PARAMETERS = EnergyModelBase.PARAMETERS + mmp.values()
+    PARAMETERS = (EnergyModelBase.PARAMETERS +
+                  list(mdt.parameters.mm_model_parameters.values()))
 
     def __init__(self, *args, **kwargs):
-        super(MMBase, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.mdtforcefield = None
 
 
 class QMBase(EnergyModelBase):
     """Common interface for quantum mechanics"""
+
+    PARAMETERS = list(mdt.parameters.qm_model_parameters.values())
 
     DEFAULT_PROPERTIES = ['potential_energy',
                           'nuclear_repulsion',
@@ -141,21 +151,16 @@ class QMBase(EnergyModelBase):
     ALL_PROPERTIES = DEFAULT_PROPERTIES
     # properties will be a pretty long list for most packages
 
-    PARAMETERS = qmp.values()
-
     def set_wfn_guess(self):
         raise NotImplementedError
 
 
 class QMMMBase(EnergyModelBase):
-    DEFAULT_PROPERTIES = ['potential_energy',
-                          'qm_energy',
-                          'mm_energy',
-                          'interaction_energy'
-                          'qm_dipole_moment',
-                          'orbitals',
-                          'orbital_energies']
-    ALL_PROPERTIES = DEFAULT_PROPERTIES
+    # DEFAULT_PROPERTIES = ['potential_energy',
+    #                       'forces',
+    #                       'qm_props',
+    #                       'mm_props']
+    # ALL_PROPERTIES = DEFAULT_PROPERTIES
 
     PARAMETERS = MMBase.PARAMETERS + QMBase.PARAMETERS
 

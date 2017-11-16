@@ -1,4 +1,9 @@
-# Copyright 2016 Autodesk Inc.
+from __future__ import print_function, absolute_import, division
+from future.builtins import *
+from future import standard_library
+standard_library.install_aliases()
+
+# Copyright 2017 Autodesk Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +17,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .quantity import *
 from .constants import *
 
 
@@ -21,6 +25,17 @@ class UnitSystem(object):
 
     In MDT, many methods will automatically convert output using the UnitSystem at
     ``moldesign.units.default``
+
+    Args:
+        length (MdtUnit): length units
+        mass (MdtUnit): mass units
+        time (MdtUnit): time units
+        energy (MdtUnit): energy units
+        temperature (MdtUnit): temperature units (default: kelvin)
+        force (MdtUnit): force units (default: energy/length)
+        momentum (MdtUnit): momentum units (default: mass * length / time)
+        angle (MdtUnit): angle units (default: radians)
+        charge (MdtUnit): charge units (default: fundamental charge)
     """
     def __init__(self, length, mass, time, energy,
                  temperature=kelvin,
@@ -68,33 +83,89 @@ class UnitSystem(object):
         self._momentum = f
 
     def convert(self, quantity):
-        """
-        Convert a quantity into this unit system
-        @param quantity: moldesign.external.pint.Quantity
+        """ Convert a quantity into this unit system.
+
+        Args:
+            quantity (MdtQuantity or MdtUnit): quantity to convert
         """
         baseunit = self.get_baseunit(quantity)
-        result = quantity.to(baseunit)
-        return result
+        if baseunit == ureg.dimensionless:
+            return quantity * ureg.dimensionless
+        else:
+            result = quantity.to(baseunit)
+            return result
+
+    def get_default(self, q):
+        """ Return the default unit system for objects with these dimensions
+
+        Args:
+            q (MdtQuantity or MdtUnit): quantity to get default units for
+
+        Returns:
+            MdtUnit: Proper units for this quantity
+        """
+        return self.get_baseunit(1.0 * q).units
+
+    def convert_if_possible(self, quantity):
+        if isinstance(quantity, MdtQuantity):
+            return self.convert(quantity)
+        else:
+            return quantity
 
     def get_baseunit(self, quantity):
-        # TODO: this needs to deal with angles
-        # if quantity.dimensionless: return 1.0 # don't call this - it's super-slow (Pint 0.6.1)
+        """ Get units of a quantity, list or array
 
+        Args:
+            quantity (Any): any number or list-like object with units
+
+        Raises:
+            TypeError: if the passed object cannot have units (e.g., it's a string or ``None``)
+
+        Returns:
+            MdtUnit: units found in the passed object
+        """
         try:
             dims = dict(quantity.dimensionality)
         except AttributeError:
-            try: return self.get_baseunit(quantity[0])
+            try:
+                q = quantity[0]
+            except (TypeError, StopIteration):
+                if isinstance(quantity, (int, float, complex)):
+                    return ureg.dimensionless
+                raise TypeError('This type of object cannot have physical units')
+            if isinstance(q, str):
+                raise TypeError('This type of object cannot have physical units')
+            try:
+                return self.get_baseunit(q)
             except (IndexError, TypeError):  # Assume dimensionless
-                return 1
-        baseunit = 1
+                return ureg.dimensionless
+        baseunit = ureg.dimensionless
 
-        # Factor out energy units (this doesn't work for things like energy/length)
+        # Factor out force units
+        if self._force:
+            if '[length]' in dims and '[mass]' in dims and '[time]' in dims:
+                while dims['[length]'] >= 1 and dims['[mass]'] >= 1 and dims['[time]'] <= -2:
+                    baseunit *= self['force']
+                    dims['[length]'] -= 1
+                    dims['[mass]'] -= 1
+                    dims['[time]'] += 2
+
+        # Factor out energy units
         if '[length]' in dims and '[mass]' in dims and '[time]' in dims:
             while dims['[length]'] >= 1 and dims['[mass]'] >= 1 and dims['[time]'] <= -2:
                 baseunit *= self['energy']
                 dims['[length]'] -= 2
                 dims['[mass]'] -= 1
                 dims['[time]'] += 2
+
+        # Factor out momentum units
+        if self._momentum:
+            if '[length]' in dims and '[mass]' in dims and '[time]' in dims:
+                while dims['[length]'] >= 1 and dims['[mass]'] >= 1 and dims['[time]'] <= -1:
+                    baseunit *= self['momentum']
+                    dims['[length]'] -= 1
+                    dims['[mass]'] -= 1
+                    dims['[time]'] += 1
 
         if '[current]' in dims:
             dims.setdefault('[charge]', 0)
@@ -105,12 +176,13 @@ class UnitSystem(object):
 
         # Otherwise, just use the units
         for unit in dims:
-            if dims[unit] == 0: continue
+            if dims[unit] == 0:
+                continue
             try:
                 baseunit *= self[unit]**dims[unit]
             except AttributeError:
                 baseunit *= ureg[unit]**dims[unit]
-        return baseunit
+        return baseunit.units
 
 
 default = UnitSystem(length=angstrom, mass=amu, time=fs, energy=eV)
